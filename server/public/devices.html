@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cession — devices</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #eef0f4; --surface: #fcfcfb; --line: #e6e5e0; --hover: #f2f1ed;
+    --ink: #0b0b0b; --ink-3: #7a7974;
+    --warn-ink: #7a5200; --warn-bg: #fab21933; --accent: #b5532f;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --line: #2f2f2c; --hover: #232321;
+      --ink: #f0efec; --ink-3: #8d8c84;
+      --warn-ink: #ffd479; --warn-bg: #fab21926; --accent: #d97757;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); padding: 28px 12px; }
+  .panel { max-width: 460px; margin: 0 auto; background: var(--surface); border-radius: 14px; box-shadow: 0 12px 40px #0002, 0 0 0 1px #0001; padding: 4px 14px 14px; }
+  .head { display: flex; align-items: center; justify-content: space-between; padding: 8px 0 10px; border-bottom: 1px solid var(--line); }
+  .head h1 { font-size: 14px; margin: 0; }
+  a { color: var(--accent); text-decoration: none; font-size: 12px; }
+  h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+  h2 form { display: flex; gap: 6px; text-transform: none; letter-spacing: 0; }
+  button, input { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  input { width: 130px; }
+  button.acc { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.rev { border: 0; background: none; color: var(--accent); padding: 0; cursor: pointer; flex: none; white-space: nowrap; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+  .row > div { min-width: 0; }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { color: var(--ink-3); font-size: 12px; }
+  .tag { font-size: 10px; background: var(--warn-bg); color: var(--warn-ink); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+  .empty { color: var(--ink-3); font-size: 12px; padding: 7px 0; border-top: 1px solid var(--line); margin: 0; }
+  .once { background: var(--hover); border-radius: 8px; padding: 10px; margin: 6px 0; display: grid; gap: 6px; }
+  .once pre { margin: 0; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .once .cmd { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+  .code { font: 600 20px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
+  code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #err { color: var(--warn-ink); margin: 10px 0 0; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<main class="panel">
+  <div class="head"><h1>Devices</h1><a href="/">← Sessions</a></div>
+
+  <h2>Machines (ingest tokens)
+    <form id="newtok"><input id="mname" placeholder="machine name" maxlength="64" aria-label="Machine name" required><button class="acc">+ New token</button></form></h2>
+  <div id="token"></div>
+  <div id="machines"></div>
+
+  <h2>Widgets <button id="pair">Pair widget</button></h2>
+  <div id="code"></div>
+  <div id="widgets"></div>
+
+  <h2>Browsers</h2>
+  <div id="browsers"></div>
+
+  <h2>Passkeys <button id="addkey">+ Add passkey</button></h2>
+  <div id="passkeys"></div>
+
+  <p id="err" role="alert"></p>
+</main>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const ago = (t) => {
+    const m = Math.round((Date.now() - t) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m} min ago`;
+    if (m < 1440) return `${Math.round(m / 60)} h ago`;
+    return `${Math.round(m / 1440)} days ago`;
+  };
+  const date = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const post = (path, body) =>
+    fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  const fail = (msg) => { $("#err").textContent = msg; };
+
+  const row = (name, sub, action = "") =>
+    `<div class="row"><div><div class="name">${name}</div><div class="sub">${sub}</div></div>${action}</div>`;
+  const revoke = (kind, id, label = "Revoke") =>
+    `<button class="rev" data-kind="${kind}" data-id="${esc(id)}">${label}</button>`;
+  const list = (items, empty) => items.join("") || `<p class="empty">${empty}</p>`;
+
+  async function load() {
+    const res = await fetch("/api/devices");
+    if (!res.ok) { location.replace("/login"); return; }
+    const d = await res.json();
+    $("#machines").innerHTML = list([
+      ...(d.legacy_ingest ? [row(`INGEST_TOKEN<span class="tag">legacy</span>`, `remove with <code>npx wrangler secret delete INGEST_TOKEN</code>`)] : []),
+      ...d.machines.map((m) => row(esc(m.name), m.last_used ? `last event ${ago(m.last_used)}` : "never used", revoke("machine", m.id))),
+    ], "No machine tokens.");
+    $("#widgets").innerHTML = list(d.widgets.map((w) => row(esc(w.label), `paired ${ago(w.created_at)}`, revoke("widget", w.id))), "No paired widgets.");
+    $("#browsers").innerHTML = list(d.browsers.map((b) =>
+      row(`${esc(b.label)}${b.current ? " · this browser" : ""}`, `signed in ${ago(b.created_at)}`, revoke("browser", b.id, b.current ? "Sign out" : "Revoke"))), "No browsers.");
+    $("#passkeys").innerHTML = list(d.passkeys.map((p) => row(esc(p.name), `added ${date(p.created_at)}`, revoke("passkey", p.id, "Remove"))), "No passkeys.");
+  }
+
+  document.addEventListener("click", async (e) => {
+    const copy = e.target.closest("[data-copy]");
+    if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); copy.textContent = "Copied"; return; }
+    const b = e.target.closest("button.rev");
+    if (!b || !confirm(`${b.textContent} this ${b.dataset.kind}?`)) return;
+    const res = await fetch(`/api/devices/${b.dataset.kind}/${b.dataset.id}`, { method: "DELETE" });
+    if (!res.ok) return fail(`Could not revoke (${res.status})`);
+    if (b.textContent === "Sign out") { location.replace("/login"); return; }
+    load();
+  });
+
+  const cmd = (text) => `<div class="cmd"><pre>${esc(text)}</pre><button data-copy="${esc(text)}">Copy</button></div>`;
+
+  $("#newtok").onsubmit = async (e) => {
+    e.preventDefault();
+    const res = await post("/api/machines", { name: $("#mname").value });
+    if (!res.ok) return fail(`Could not create token (${res.status})`);
+    const { token, url } = await res.json();
+    // The token stays out of the setup command so it never lands in chat or settings.json.
+    $("#token").innerHTML = `<div class="once">
+      <div>New token for <b>${esc($("#mname").value.trim())}</b> — shown once</div>
+      <div class="sub">add to ~/.zshrc</div>${cmd(`export CESSION_TOKEN='${token}'`)}
+      <div class="sub">or, where Claude Code doesn't read ~/.zshrc (code-server, apps opened from the Dock), run in a terminal</div>${cmd(`mkdir -p ~/.config/cession && (umask 077 && echo '${token}' > ~/.config/cession/token)`)}
+      <div class="sub">then run in Claude Code</div>${cmd(`/cession:setup ${url}`)}</div>`;
+    $("#mname").value = "";
+    load();
+  };
+
+  let timer;
+  $("#pair").onclick = async () => {
+    const res = await post("/api/pairing");
+    if (!res.ok) return fail(`Could not create a pairing code (${res.status})`);
+    const { code, expires_at } = await res.json();
+    clearInterval(timer);
+    const tick = () => {
+      const s = Math.max(0, Math.round((expires_at - Date.now()) / 1000));
+      $("#code").innerHTML = s
+        ? `<div class="once"><div class="code">${esc(code)}</div><div class="sub">Enter in the widget · expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}</div></div>`
+        : `<div class="once"><div class="sub">Code expired. Pair again for a new one.</div></div>`;
+      if (!s) clearInterval(timer);
+    };
+    tick();
+    timer = setInterval(tick, 1000);
+  };
+
+  // A browser session needs no setup code, but the server wants a fresh user-verified sign-in first.
+  $("#addkey").onclick = async () => {
+    fail("");
+    try {
+      const login = await post("/auth/login/options");
+      if (!login.ok) throw new Error(`Not allowed (${login.status})`);
+      const assertion = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(await login.json()) });
+      const opts = await post("/auth/register/options", { assertion: assertion.toJSON() });
+      if (!opts.ok) throw new Error(`Not allowed (${opts.status})`);
+      const credential = await navigator.credentials.create({ publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(await opts.json()) });
+      const res = await post("/auth/register/verify", { response: credential.toJSON(), name: `${navigator.platform || "Passkey"} ${new Date().toISOString().slice(0, 10)}` });
+      if (res.status !== 204) throw new Error("Passkey was not accepted");
+      load();
+    } catch (err) {
+      fail(err.message);
+    }
+  };
+
+  load();
+</script>
+</body>
+</html>

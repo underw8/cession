@@ -1,0 +1,7 @@
+{
+  "productName": "cession-widget",
+  "version": "0.1.0",
+  "identifier": "me.caidu.cession.widget",
+  "build": { "frontendDist": "./ui" },
+  "app": { "windows": [] }
+}

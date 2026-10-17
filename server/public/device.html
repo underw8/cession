@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cession — approve a machine</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #eef0f4; --surface: #fcfcfb; --line: #e6e5e0; --hover: #f2f1ed;
+    --ink: #0b0b0b; --ink-2: #52514e; --warn-ink: #7a5200; --good-ink: #0a6b0a; --accent: #b5532f;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --line: #2f2f2c; --hover: #232321;
+      --ink: #f0efec; --ink-2: #c3c2b7; --warn-ink: #ffd479; --good-ink: #7ee07e; --accent: #d97757;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); padding: 28px 12px; }
+  form { max-width: 340px; margin: 0 auto; background: var(--surface); border-radius: 14px; box-shadow: 0 12px 40px #0002, 0 0 0 1px #0001; padding: 18px; display: grid; gap: 8px; }
+  h1 { font-size: 14px; margin: 0 0 4px; }
+  label, .sub { color: var(--ink-2); font-size: 12px; }
+  input, button { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--hover); color: var(--ink); }
+  input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .08em; }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .machine { font-size: 15px; font-weight: 650; }
+  #msg { margin: 0; color: var(--warn-ink); }
+  #msg.ok { color: var(--good-ink); }
+</style>
+</head>
+<body>
+<form id="form">
+  <h1>Approve a machine</h1>
+  <label for="code">Code shown by /cession:setup</label>
+  <input id="code" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" required autofocus>
+  <div id="who" hidden>
+    <div class="machine" id="name"></div>
+    <div class="sub" id="from"></div>
+  </div>
+  <button id="go">Continue</button>
+  <p id="msg" role="alert"></p>
+</form>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const code = $("#code");
+  let request = null;
+
+  // Shows which machine asked, so a code sent by someone else is easy to spot before approving.
+  async function check() {
+    $("#msg").textContent = "";
+    const res = await fetch(`/api/device?code=${encodeURIComponent(code.value.trim())}`);
+    if (!res.ok) { request = null; $("#who").hidden = true; $("#go").textContent = "Continue"; $("#msg").textContent = "Code wrong or expired"; return; }
+    request = await res.json();
+    $("#name").textContent = request.name;
+    $("#from").textContent = `asked ${Math.max(0, Math.round((Date.now() - request.created_at) / 60000))} min ago from ${request.ip}`;
+    $("#who").hidden = false;
+    $("#go").textContent = "Approve";
+  }
+
+  $("#form").onsubmit = async (e) => {
+    e.preventDefault();
+    if (!request) return check();
+    const res = await fetch("/api/device/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.value.trim() }) });
+    if (res.status !== 204) { request = null; return check(); }
+    $("#go").hidden = true;
+    code.disabled = true;
+    $("#msg").className = "ok";
+    $("#msg").textContent = "Approved. Return to Claude Code; you can close this tab.";
+  };
+  code.oninput = () => { request = null; $("#who").hidden = true; $("#go").textContent = "Continue"; };
+
+  code.value = new URLSearchParams(location.search).get("code") ?? "";
+  if (code.value) check();
+</script>
+</body>
+</html>

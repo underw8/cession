@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cession — sign in</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #eef0f4; --surface: #fcfcfb; --line: #e6e5e0; --hover: #f2f1ed;
+    --ink: #0b0b0b; --ink-2: #52514e; --warn-ink: #7a5200; --accent: #b5532f;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --line: #2f2f2c; --hover: #232321;
+      --ink: #f0efec; --ink-2: #c3c2b7; --warn-ink: #ffd479; --accent: #d97757;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); padding: 28px 12px; }
+  main { max-width: 320px; margin: 0 auto; background: var(--surface); border-radius: 14px; box-shadow: 0 12px 40px #0002, 0 0 0 1px #0001; padding: 18px; display: grid; gap: 12px; }
+  h1 { font-size: 14px; margin: 0; }
+  button, input { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--hover); color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  form { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+  label { color: var(--ink-2); font-size: 12px; }
+  #err { color: var(--warn-ink); min-height: 1.4em; margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>cession</h1>
+  <button class="primary" id="signin">Sign in with passkey</button>
+  <form id="setup">
+    <label for="code">First time or lost passkey? Enter setup code</label>
+    <input id="code" autocomplete="off" required>
+    <button>Register a passkey</button>
+  </form>
+  <p id="err" role="alert"></p>
+</main>
+<script>
+  // ponytail: native JSON helpers need Safari 18.4+ or Chrome 129+. Vendor @simplewebauthn/browser if older browsers matter.
+  const err = document.getElementById("err");
+  const post = (path, body) =>
+    fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  async function run(kind, body) {
+    err.textContent = "";
+    try {
+      const opts = await post(`/auth/${kind}/options`, body);
+      if (!opts.ok) throw new Error(opts.status === 429 ? "Too many attempts, try again later" : (await opts.text()) || "Not allowed");
+      const json = await opts.json();
+      const credential = kind === "register"
+        ? await navigator.credentials.create({ publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(json) })
+        : await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(json) });
+      const res = await post(`/auth/${kind}/verify`, { response: credential.toJSON(), name: `${navigator.platform || "Passkey"} ${new Date().toISOString().slice(0, 10)}` });
+      if (res.status !== 204) throw new Error("Passkey was not accepted");
+      // Only same-origin, and as an absolute URL: a path like "//evil.example" would otherwise
+      // be read as protocol-relative and leave the site.
+      const next = new URL(new URLSearchParams(location.search).get("next") || "/", location.origin);
+      location.replace(next.origin === location.origin ? next.href : "/");
+    } catch (e) {
+      err.textContent = e.message;
+    }
+  }
+
+  document.getElementById("signin").onclick = () => run("login", {});
+  document.getElementById("setup").onsubmit = (e) => {
+    e.preventDefault();
+    run("register", { setup_code: document.getElementById("code").value });
+  };
+</script>
+</body>
+</html>

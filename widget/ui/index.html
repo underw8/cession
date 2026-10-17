@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cession — pair widget</title>
+<script>
+  // Tray "Pair with server…" opens #pair to change servers; otherwise go straight to the saved one.
+  const saved = localStorage.cession_url;
+  if (saved && location.hash !== "#pair") location.replace(saved);
+</script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #eef0f4; --surface: #fcfcfb; --line: #e6e5e0; --hover: #f2f1ed;
+    --ink: #0b0b0b; --ink-2: #52514e; --accent: #b5532f;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --line: #2f2f2c; --hover: #232321;
+      --ink: #f0efec; --ink-2: #c3c2b7; --accent: #d97757;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); padding: 28px 12px; }
+  .panel { max-width: 460px; margin: 0 auto; background: var(--surface); border-radius: 14px; box-shadow: 0 12px 40px #0002, 0 0 0 1px #0001; padding: 18px; display: grid; gap: 8px; }
+  h1 { font-size: 14px; margin: 0 0 4px; }
+  label { color: var(--ink-2); font-size: 12px; }
+  input, button { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--hover); color: var(--ink); }
+  #code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .08em; }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  #err { color: var(--accent); font-size: 12px; margin: 0; }
+  #err:empty { display: none; }
+</style>
+</head>
+<body>
+<form class="panel" id="pair">
+  <h1>cession</h1>
+  <label for="url">Server URL</label>
+  <input id="url" type="url" placeholder="https://cession.example.com" autocomplete="off" required>
+  <label for="code">Pairing code from the Devices page</label>
+  <input id="code" name="code" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" required>
+  <p id="err" role="alert"></p>
+  <button>Pair</button>
+</form>
+<script>
+  const urlInput = document.getElementById("url");
+  urlInput.value = saved ?? "";
+  (saved ? document.getElementById("code") : urlInput).focus();
+  document.getElementById("pair").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const url = urlInput.value.trim().replace(/\/+$/, "");
+    // The pairing code and session cookie must not cross plain HTTP; localhost is for dev.
+    const { protocol, hostname } = new URL(url);
+    const ok = protocol === "https:" || (protocol === "http:" && ["localhost", "127.0.0.1"].includes(hostname));
+    document.getElementById("err").textContent = ok ? "" : "Server URL must start with https://";
+    if (!ok) return;
+    localStorage.cession_url = url;
+    // A real top-level POST, so the session cookie lands on the server's origin. Only the named
+    // code field is sent; submit() doesn't re-fire this handler.
+    Object.assign(e.target, { method: "post", action: `${url}/auth/pair` }).submit();
+  });
+</script>
+</body>
+</html>

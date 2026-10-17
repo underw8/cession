@@ -1,0 +1,28 @@
+{
+  "name": "cession-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var DEV_SKIP_AUTH:1",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "types": "wrangler types",
+    "typecheck": "wrangler types >/dev/null && tsc --noEmit && tsc --noEmit -p test"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SETUP_CODE": {
+        "description": "A random string of at least 32 characters, e.g. `openssl rand -hex 16`. Enter it on first visit to register your passkey; keep it to recover a lost passkey."
+      }
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.2",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.4",
+    "wrangler": "^4.151.0"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^13.3.3"
+  }
+}

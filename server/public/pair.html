@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cession — pair widget</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #eef0f4; --surface: #fcfcfb; --line: #e6e5e0; --hover: #f2f1ed;
+    --ink: #0b0b0b; --ink-2: #52514e; --warn-ink: #7a5200; --accent: #b5532f;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --line: #2f2f2c; --hover: #232321;
+      --ink: #f0efec; --ink-2: #c3c2b7; --warn-ink: #ffd479; --accent: #d97757;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); padding: 28px 12px; }
+  form { max-width: 320px; margin: 0 auto; background: var(--surface); border-radius: 14px; box-shadow: 0 12px 40px #0002, 0 0 0 1px #0001; padding: 18px; display: grid; gap: 8px; }
+  h1 { font-size: 14px; margin: 0 0 4px; }
+  label { color: var(--ink-2); font-size: 12px; }
+  input, button { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--hover); color: var(--ink); }
+  input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .08em; }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  #err { color: var(--warn-ink); margin: 0; }
+</style>
+</head>
+<body>
+<form method="post" action="/auth/pair">
+  <h1>cession</h1>
+  <label for="code">Pairing code from the Devices page</label>
+  <input id="code" name="code" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" required autofocus>
+  <button>Pair</button>
+  <p id="err" role="alert" hidden>Code wrong or expired</p>
+</form>
+<script>
+  document.getElementById("err").hidden = new URLSearchParams(location.search).get("error") !== "1";
+</script>
+</body>
+</html>

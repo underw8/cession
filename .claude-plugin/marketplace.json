@@ -1,0 +1,7 @@
+{
+  "name": "cession",
+  "owner": { "name": "underw8" },
+  "plugins": [
+    { "name": "cession", "source": "./plugin", "description": "Report Claude Code sessions to your cession dashboard" }
+  ]
+}

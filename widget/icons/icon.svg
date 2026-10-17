@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262624"/>
+      <stop offset="1" stop-color="#0d0d0d"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS icon grid: 824pt body inset 100pt -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#ffffff" stroke-opacity=".08"/>
+  <!-- one row per session status: working, needs you, idle -->
+  <circle cx="300" cy="372" r="44" fill="#3ccf3c"/>
+  <rect x="384" y="344" width="360" height="56" rx="28" fill="#f0efec"/>
+  <circle cx="300" cy="512" r="44" fill="#fab219"/>
+  <rect x="384" y="484" width="280" height="56" rx="28" fill="#f0efec" fill-opacity=".6"/>
+  <circle cx="300" cy="652" r="36" fill="none" stroke="#8a8a85" stroke-width="16"/>
+  <rect x="384" y="624" width="200" height="56" rx="28" fill="#f0efec" fill-opacity=".3"/>
+</svg>

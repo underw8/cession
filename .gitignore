@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars
+.vitest/
+tmp/
+widget/target/
+widget/gen/
+.superpowers/
+docs/superpowers/
+server/worker-configuration.d.ts

@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Live status and cost of Claude Code sessions across your machines">
+<title>cession</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #eef0f4; --surface: #fcfcfb; --line: #e6e5e0; --hover: #f2f1ed;
+    --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #7a7974;
+    --good: #0ca30c; --good-ink: #0a6b0a; --warn-icon: #c98500; --warn-ink: #7a5200; --warn-bg: #fab21933;
+    --accent: #b5532f; --bar: #f4c9b8; --bar-today: #d97757;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --line: #2f2f2c; --hover: #232321;
+      --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8d8c84;
+      --good-ink: #7ee07e; --warn-icon: #fab219; --warn-ink: #ffd479; --warn-bg: #fab21926;
+      --accent: #d97757; --bar: #6e3a27; --bar-today: #d97757;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); padding: 28px 12px; }
+  .panel { max-width: 460px; margin: 0 auto; background: var(--surface); border-radius: 14px; box-shadow: 0 12px 40px #0002, 0 0 0 1px #0001; overflow: hidden; }
+  .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+  .head h1 { font-size: 14px; margin: 0; }
+  #conn { font-size: 11px; color: var(--ink-3); }
+  #devices { font-size: 12px; color: var(--accent); text-decoration: none; }
+  .chips { display: flex; gap: 6px; margin-left: auto; }
+  .chip { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--hover); color: var(--ink-2); }
+  .chip.needs_you { background: var(--warn-bg); color: var(--warn-ink); }
+  .chip.working { background: #0ca30c1f; color: var(--good-ink); }
+  svg.icon { width: 10px; height: 10px; flex: none; }
+  .group { padding: 8px 6px 4px; }
+  .group h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); margin: 4px 8px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border-radius: 8px; }
+  .row:hover { background: var(--hover); }
+  .row svg.icon { width: 14px; height: 14px; }
+  .row.needs_you svg { color: var(--warn-icon); } .row.working svg { color: var(--good); } .row.idle svg { color: var(--ink-3); }
+  .row .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .title span { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-2); font-weight: 400; margin-left: 6px; }
+  .row .sub { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .right { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .row .cost { font-weight: 600; }
+  .row .when { font-size: 11px; color: var(--ink-3); }
+  .row .meta, #more { display: none; }
+  .row.needs_you .when { color: var(--warn-ink); font-weight: 600; }
+  .empty { color: var(--ink-3); padding: 18px 14px; margin: 0; }
+  .foot { border-top: 1px solid var(--line); padding: 10px 14px 12px; display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: end; }
+  .today .label { font-size: 11px; color: var(--ink-3); }
+  .today .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .today .delta { font-size: 11px; color: var(--ink-2); }
+  svg.spark { width: 100%; height: 46px; display: block; }
+  details { border-top: 1px solid var(--line); }
+  summary { padding: 10px 14px; color: var(--accent); cursor: pointer; font-size: 12px; }
+  .history { padding: 0 14px 14px; overflow-x: auto; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+  .controls select, .controls input { font: inherit; min-height: 32px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--ink-3); font-weight: 600; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Bar mode: a panel resized to a thin strip shows live sessions as one row, then today's cost. */
+  @media (max-height: 60px) {
+    /* Always black, in light and dark mode alike, so the strip reads the same over any desktop. */
+    :root {
+      color-scheme: dark; --page: #000; --surface: #000;
+      --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8d8c84;
+      --good-ink: #7ee07e; --warn-icon: #fab219; --warn-ink: #ffd479; --warn-bg: #fab21926;
+    }
+    body { padding: 0; }
+    .panel { max-width: none; height: 100vh; border-radius: 0; box-shadow: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; }
+    /* Waiting on the user: the amber tint pulses like Mazda's heartbeat turn signal: it
+       snaps on, then fades out slowly. */
+    .panel { position: relative; isolation: isolate; }
+    .panel:has(.chip.needs_you)::before { content: ""; position: absolute; inset: 0; z-index: -1; background: #fab219; opacity: .14; animation: heartbeat 1s infinite; }
+    /* One beat per second (60 bpm); the fade runs the whole interval, with no hold before the next beat. */
+    @keyframes heartbeat {
+      0% { opacity: .04; animation-timing-function: linear; }
+      7% { opacity: .45; animation-timing-function: cubic-bezier(.25, .6, .45, 1); }
+      100% { opacity: .04; }
+    }
+    @media (prefers-reduced-motion: reduce) { .panel:has(.chip.needs_you)::before { animation: none; } }
+    #live { flex: 1; min-width: 0; display: flex; gap: 4px; overflow: hidden; mask-image: linear-gradient(to left, transparent, #000 24px); }
+    #live .group { display: contents; }
+    #live .row { flex: none; display: flex; gap: 7px; padding: 3px 8px; border-radius: 999px; }
+    #live .row > div:not(.right) { display: flex; align-items: baseline; gap: 7px; }
+    #live .row svg.icon { width: 10px; height: 10px; }
+    #live .row.idle .title { color: var(--ink-3); font-weight: 500; }
+    .row .meta { display: inline; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    .row.needs_you .meta { color: var(--warn-ink); }
+    #more { display: block; flex: none; color: var(--ink-3); font-weight: 600; }
+    .foot { display: block; padding: 0; border: 0; transition: opacity .15s; }
+    /* The widget's hover buttons sit over the right end, so the cost steps aside while they show. */
+    html.cession-hover .foot { opacity: 0; }
+    .today { display: flex; align-items: baseline; gap: 5px; }
+    .today .value { font-size: 13px; }
+    .head, .row .title span, .row .sub, .row .right, #live .empty, #live h2, .delta, svg.spark, details { display: none; }
+  }
+  .tip { position: fixed; pointer-events: none; opacity: 0; background: #0b0b0b; color: #fff; border-radius: 6px; padding: 5px 8px; font-size: 11px; transition: opacity .1s; }
+</style>
+</head>
+<body>
+<main class="panel">
+  <div class="head"><h1>cession</h1><span id="conn">connecting…</span><div class="chips" id="chips"></div><a id="devices" href="/devices" hidden>Devices</a></div>
+  <div id="live"><p class="empty">No live sessions.</p></div>
+  <span id="more"></span>
+  <div class="foot">
+    <div class="today"><div class="label">Today</div><div class="value" id="today">—</div><div class="delta" id="delta"></div></div>
+    <svg class="spark" id="spark" role="img" aria-label="Cost per day, last 7 days"></svg>
+  </div>
+  <details>
+    <summary>History</summary>
+    <div class="history">
+      <div class="controls">
+        <select id="by" aria-label="Group history by"><option value="day">by day</option><option value="project">by project</option></select>
+        <input type="date" id="from" aria-label="From date"> – <input type="date" id="to" aria-label="To date">
+      </div>
+      <table>
+        <thead><tr><th>Key</th><th class="num">Sessions</th><th class="num">Time</th><th class="num">Cost</th><th class="num" title="Input / output tokens">Tokens in/out</th><th class="num" title="Cache read / cache write tokens">Cache r/w</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+  </details>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const mins = (ms) => Math.max(0, Math.round(ms / 60000));
+const span = (m) => (m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`);
+const ago = (ms) => { const m = mins(Date.now() - ms); return m < 1 ? "now" : `${span(m)} ago`; };
+const dur = (ms) => span(mins(ms));
+const usd = (n) => `$${(n ?? 0).toFixed(2)}`;
+const tok = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format;
+const DAY = 86400000;
+const LABEL = { needs_you: "Needs you", working: "Working", idle: "Idle" };
+const ICON = {
+  working: '<svg class="icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="currentColor"/></svg>',
+  needs_you: '<svg class="icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1l5 9H1z" fill="currentColor"/></svg>',
+  idle: '<svg class="icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+};
+
+let snapshot = null;
+function renderLive() {
+  if (!snapshot) return;
+  const c = {};
+  for (const r of snapshot.sessions) c[r.status] = (c[r.status] ?? 0) + 1;
+  // LABEL's key order is urgency order: needs you, then working, then idle.
+  const present = Object.keys(LABEL).filter((s) => c[s]);
+  document.title = present.length ? `${present.map((s) => `${c[s]} ${LABEL[s].toLowerCase()}`).join(" · ")} — cession` : "cession";
+  $("#chips").innerHTML = present
+    .map((s) => `<span class="chip ${s}" title="${c[s]} ${LABEL[s].toLowerCase()}">${ICON[s]}${c[s]}<span class="label"> ${LABEL[s].toLowerCase()}</span></span>`).join("");
+  if (!snapshot.sessions.length) { $("#live").innerHTML = `<p class="empty">No live sessions.</p>`; countHidden(); return; }
+  // last_event is the latest hook (status change); last_seen also moves on metric exports.
+  const since = (r) => r.last_event || r.last_seen;
+  // Within a group, the longest-waiting session is on top.
+  const rows = [...snapshot.sessions].sort((a, b) => since(a) - since(b));
+  const groups = present.map((s) => [s, rows.filter((r) => r.status === s)]);
+  $("#live").innerHTML = groups.map(([s, list]) => `
+    <div class="group"><h2>${LABEL[s]}</h2>${list.map((r) => `
+      <div class="row ${s}" title="${esc(r.cwd)}">
+        ${ICON[s]}
+        <div><div class="title">${esc(r.project ?? "—")}${r.branch ? `<span>${esc(r.branch)}</span>` : ""}</div>
+          <div class="sub">${esc(r.machine ?? "unknown machine")}${r.started_at ? ` · up ${dur(Date.now() - r.started_at)}` : ""}</div>
+          <span class="meta">${barMeta(r)}</span></div>
+        <div class="right"><div class="cost">${usd(r.cost_usd)}</div>
+          <div class="when">${s === "needs_you" ? `waiting ${dur(Date.now() - since(r))}` : ago(since(r))}</div></div>
+      </div>`).join("")}</div>`).join("");
+  countHidden();
+}
+
+// Bar mode's one-line summary per row: how long it has waited, run so far, or sat idle.
+function barMeta(r) {
+  if (r.status === "needs_you") return `waiting ${dur(Date.now() - (r.last_event || r.last_seen))}`;
+  if (r.status === "idle") return `idle ${dur(Date.now() - (r.last_event || r.last_seen))}`;
+  return [r.started_at && dur(Date.now() - r.started_at), usd(r.cost_usd)].filter(Boolean).join(" · ");
+}
+
+// Counts rows at least half cut off by the bar's right edge (or its fade), shown as "+N".
+const barMode = matchMedia("(max-height: 60px)");
+function countHidden() {
+  const edge = $("#live").getBoundingClientRect().right - 24;
+  const mid = (el) => { const b = el.getBoundingClientRect(); return (b.left + b.right) / 2; };
+  const hidden = barMode.matches ? [...$("#live").querySelectorAll(".row")].filter((r) => mid(r) > edge).length : 0;
+  $("#more").textContent = hidden ? `+${hidden}` : "";
+}
+addEventListener("resize", countHidden);
+
+let delay = 1000;
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live`);
+  ws.onopen = () => { delay = 1000; $("#conn").textContent = "live"; };
+  ws.onmessage = (e) => { snapshot = JSON.parse(e.data); renderLive(); };
+  ws.onclose = async () => {
+    try {
+      const res = await fetch("/api/sessions", { redirect: "manual" });
+      // Only a lost session sends the page back through the gate; a 5xx keeps backing off.
+      if (res.status === 401 || res.status === 403) { location.reload(); return; }
+    } catch {
+      // Server is down, not an expired session; keep backing off.
+    }
+    $("#conn").textContent = "reconnecting…";
+    setTimeout(connect, delay);
+    delay = Math.min(delay * 2, 30000);
+  };
+}
+
+// Day keys from the API are UTC dates.
+const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+
+async function loadWeek() {
+  const end = Date.parse(utcDay(Date.now())) + DAY;
+  try {
+    const res = await fetch(`/api/history?by=day&from=${end - 7 * DAY}&to=${end}`);
+    if (!res.ok) return;
+    const byKey = new Map((await res.json()).map((r) => [r.key, r]));
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const key = utcDay(end - (7 - i) * DAY);
+      return { key, cost: byKey.get(key)?.cost_usd ?? 0, sessions: byKey.get(key)?.sessions ?? 0 };
+    });
+    const today = days.at(-1), avg = days.slice(0, -1).reduce((a, d) => a + d.cost, 0) / 6;
+    $("#today").textContent = usd(today.cost);
+    $("#delta").textContent = `${today.cost >= avg ? "▲" : "▼"} vs ${usd(avg)} 6-day avg`;
+    const W = 240, H = 46, bw = W / days.length, max = Math.max(...days.map((d) => d.cost)) || 1;
+    $("#spark").setAttribute("viewBox", `0 0 ${W} ${H}`);
+    $("#spark").innerHTML = days.map((d, i) => {
+      const h = (d.cost / max) * (H - 4), x = i * bw + 4, w = bw - 8;
+      const tip = esc(`<b>${d.key}</b><br>${usd(d.cost)} · ${d.sessions} sessions`);
+      return `<rect x="${i * bw}" y="0" width="${bw}" height="${H}" fill="transparent" data-tip="${tip}"/>` + (h
+        ? `<path d="M${x},${H} V${H - h + 3} q0,-3 3,-3 h${w - 6} q3,0 3,3 V${H} Z" fill="var(${i === days.length - 1 ? "--bar-today" : "--bar"})" pointer-events="none"/>`
+        : `<rect x="${x}" y="${H - 1}" width="${w}" height="1" fill="var(--line)"/>`);
+    }).join("");
+  } catch {
+    // Leave the last values in place; the next refresh retries.
+  }
+}
+
+async function loadHistory() {
+  const from = Date.parse($("#from").value);
+  const to = Date.parse($("#to").value) + DAY;
+  if (Number.isNaN(from) || Number.isNaN(to)) { $("#history").innerHTML = `<tr><td colspan="6" class="empty">Pick a date range.</td></tr>`; return; }
+  try {
+    const res = await fetch(`/api/history?by=${$("#by").value}&from=${from}&to=${to}`);
+    if (!res.ok) { $("#history").innerHTML = `<tr><td colspan="6" class="empty">History unavailable (${res.status}).</td></tr>`; return; }
+    const rows = await res.json();
+    $("#history").innerHTML = rows.map((r) => `
+      <tr><td>${esc(r.key)}</td><td class="num">${r.sessions}</td><td class="num">${dur(r.duration_ms)}</td>
+      <td class="num">${usd(r.cost_usd)}</td><td class="num">${tok(r.tokens_in)} / ${tok(r.tokens_out)}</td>
+      <td class="num">${tok(r.tokens_cache_read)} / ${tok(r.tokens_cache_write)}</td></tr>`
+    ).join("") || `<tr><td colspan="6" class="empty">No sessions in range.</td></tr>`;
+  } catch {
+    $("#history").innerHTML = `<tr><td colspan="6" class="empty">History unavailable.</td></tr>`;
+  }
+}
+
+// One tooltip for every chart mark carrying data-tip (values are escaped where data-tip is built).
+// Pointer-only duplicate of the History table, so hidden from assistive tech.
+const tip = Object.assign(document.createElement("div"), { className: "tip" });
+tip.setAttribute("aria-hidden", "true");
+document.body.append(tip);
+document.addEventListener("pointermove", (e) => {
+  const t = e.target.closest("[data-tip]");
+  if (!t) { tip.style.opacity = 0; return; }
+  tip.innerHTML = t.dataset.tip;
+  Object.assign(tip.style, { opacity: 1, left: `${e.clientX + 12}px`, top: `${e.clientY + 12}px` });
+});
+
+const todayKey = utcDay(Date.now());
+$("#to").value = todayKey;
+$("#from").value = utcDay(Date.parse(todayKey) - 6 * DAY);
+for (const el of ["#by", "#from", "#to"]) $(el).addEventListener("change", loadHistory);
+$("details").addEventListener("toggle", (e) => { if (e.target.open) loadHistory(); });
+
+// Widget sessions can't open Devices, so only browsers get the link.
+fetch("/api/me").then((r) => r.ok && r.json()).then((me) => { $("#devices").hidden = me?.kind !== "browser"; }).catch(() => {});
+
+connect();
+loadWeek();
+setInterval(renderLive, 30000);
+setInterval(loadWeek, 60000);
+</script>
+</body>
+</html>
