@@ -28,7 +28,7 @@ server/src/index.ts       router: ingest routes, CSRF check, auth routes, sessio
 server/src/hub.ts         Durable Object "Hub": all state in SQLite, status machine, WS broadcast, alarm, history
 server/src/authstore.ts   sessions, passkeys, machine tokens, pairing codes, lockout (SQL used by Hub)
 server/src/passkey.ts     WebAuthn routes
-server/src/auth.ts        ingest token and cookie checks, lockout client keys
+server/src/auth.ts        machine token and cookie checks, lockout client keys
 server/src/event.ts       hook event validation;  otlp.ts: OTLP metrics → usage updates
 server/public/            one inline-script HTML file per page, no build step
 server/test/              vitest suites; helpers.ts, authenticator.ts (software WebAuthn authenticator)
@@ -40,7 +40,7 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 
 | Route | Auth | Behaviour |
 |---|---|---|
-| `POST /events`, `POST /v1/metrics` | `Bearer` machine token (or legacy `INGEST_TOKEN`) | hook event / OTLP JSON into the Hub |
+| `POST /events`, `POST /v1/metrics` | `Bearer` machine token | hook event / OTLP JSON into the Hub |
 | `POST /auth/register/*`, `/auth/login/*`, `/auth/logout` | `SETUP_CODE`, or a browser session plus a fresh assertion | passkey ceremony, issues the session cookie |
 | `POST /auth/pair` | one-time pairing code | widget gets a session cookie |
 | `POST /auth/device`, `/auth/device/token` | none; budgeted per client | device login (RFC 8628): a machine starts it, then polls until a browser approves |
@@ -76,7 +76,7 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 
 ## Testing
 
-Tests run inside workerd with real Durable Object storage; nothing is mocked. `vitest.config.ts` binds `INGEST_TOKEN=test-token` and `DEV_SKIP_AUTH=1`; `authEnv` in `helpers.ts` unsets the bypass. Storage is shared across tests and never reset, so isolate with `uid()`.
+Tests run inside workerd with real Durable Object storage; nothing is mocked. `vitest.config.ts` binds `DEV_SKIP_AUTH=1`; `authEnv` in `helpers.ts` unsets the bypass, and `post()` ingests with a shared machine token from `machineToken()`. Storage is shared across tests and never reset, so isolate with `uid()`.
 
 ```bash
 npx vitest run test/events.test.ts
@@ -90,7 +90,6 @@ TypeScript `strict`, 2-space indent, double quotes, semicolons. snake_case for D
 ## Configuration
 
 - `SETUP_CODE` (`npx wrangler secret put SETUP_CODE`, at least 32 characters, e.g. `openssl rand -hex 16`) registers the first passkey and recovers a lost one. `.dev.vars.example` leaves it blank on purpose.
-- `INGEST_TOKEN` is a legacy optional secret; per-machine tokens replace it, and `/api/devices` reports it as `legacy_ingest`.
 - Per machine: the token comes from `CESSION_TOKEN`, or else from `~/.config/cession/token` (`$XDG_CONFIG_HOME` aware), which `/cession:setup` fills through a device login (`plugin/skills/setup/login.sh`). The token never passes through the chat, argv or stdout; `/cession:setup` writes `CESSION_URL` and the OTel vars to `~/.claude/settings.json`; `CESSION_MACHINE` overrides `hostname -s`.
 
 ## Pitfalls

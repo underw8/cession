@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      miniflare: { bindings: { INGEST_TOKEN: "test-token", DEV_SKIP_AUTH: "1" } },
+      miniflare: { bindings: { DEV_SKIP_AUTH: "1" } },
     }),
   ],
 });

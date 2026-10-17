@@ -125,7 +125,7 @@ export async function createMachineToken(sql: SqlStorage, name: string, passkeyI
   return { id, token };
 }
 
-export async function checkIngestToken(sql: SqlStorage, token: string): Promise<boolean> {
+export async function checkMachineToken(sql: SqlStorage, token: string): Promise<boolean> {
   const hash = await sha256hex(token);
   return sql.exec(`UPDATE machine_tokens SET last_used = ? WHERE hash = ?`, Date.now(), hash).rowsWritten > 0;
 }

@@ -77,7 +77,7 @@ describe("parseOtlp", () => {
 });
 
 describe("POST /v1/metrics", () => {
-  it("requires the ingest token", async () => {
+  it("requires a machine token", async () => {
     expect((await post("/v1/metrics", payload({ temporality: 1 }), "nope")).status).toBe(401);
   });
 

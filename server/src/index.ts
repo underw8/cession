@@ -46,7 +46,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   const hub = env.HUB.get(env.HUB.idFromName("hub"));
 
   if (req.method === "POST" && url.pathname === "/events") {
-    if (!(await ingestAuthorized(req, env, hub))) return status(401, "unauthorized");
+    if (!(await ingestAuthorized(req, hub))) return status(401, "unauthorized");
     const event = parseEvent(await req.json().catch(() => null));
     if (!event) return status(400, "bad event");
     await hub.applyEvent(event);
@@ -54,7 +54,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   }
 
   if (req.method === "POST" && url.pathname === "/v1/metrics") {
-    if (!(await ingestAuthorized(req, env, hub))) return status(401, "unauthorized");
+    if (!(await ingestAuthorized(req, hub))) return status(401, "unauthorized");
     const body = await req.json().catch(() => undefined);
     if (body === undefined) return status(400, "bad json");
     await hub.applyUsage(parseOtlp(body));
@@ -138,7 +138,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   }
 
   if (req.method === "GET" && url.pathname === "/api/devices")
-    return Response.json({ ...(await hub.devices(session.id)), legacy_ingest: Boolean(env.INGEST_TOKEN) });
+    return Response.json(await hub.devices(session.id));
 
   if (req.method === "POST" && url.pathname === "/api/machines") {
     const body = await req.json<{ name?: unknown }>().catch(() => null);

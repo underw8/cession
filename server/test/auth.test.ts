@@ -1,30 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { clientKey, ingestAuthorized } from "../src/auth";
 import type { Hub } from "../src/hub";
-import { TOKEN, hub, post, uid } from "./helpers";
+import { hub, post, uid } from "./helpers";
 
-const env = { INGEST_TOKEN: "t0ken" } as unknown as Env;
 const req = (headers: Record<string, string> = {}) => new Request("https://x.test/", { headers });
-const noMachineTokens = { checkIngestToken: async () => false } as unknown as DurableObjectStub<Hub>;
+const onlyToken = (good: string) => ({ checkMachineToken: async (t: string) => t === good }) as unknown as DurableObjectStub<Hub>;
 
 describe("ingestAuthorized", () => {
-  it("accepts the exact bearer token", async () => {
-    expect(await ingestAuthorized(req({ Authorization: "Bearer t0ken" }), env, noMachineTokens)).toBe(true);
+  it("accepts a known machine token as a bearer token", async () => {
+    expect(await ingestAuthorized(req({ Authorization: "Bearer cs_good" }), onlyToken("cs_good"))).toBe(true);
   });
-  it.each([[{}], [{ Authorization: "Bearer wrong" }], [{ Authorization: "Bearer t0ken2" }], [{ Authorization: "t0ken" }]])(
+  it.each([[{}], [{ Authorization: "Bearer " }], [{ Authorization: "Bearer cs_bad" }], [{ Authorization: "cs_good" }]])(
     "rejects %j",
-    async (headers) => expect(await ingestAuthorized(req(headers), env, noMachineTokens)).toBe(false),
+    async (headers) => expect(await ingestAuthorized(req(headers), onlyToken("cs_good"))).toBe(false),
   );
-  it("rejects everything when INGEST_TOKEN is unset and no machine token matches", async () => {
-    const noToken = { ...env, INGEST_TOKEN: "" } as unknown as Env;
-    expect(await ingestAuthorized(req({ Authorization: "Bearer " }), noToken, noMachineTokens)).toBe(false);
-  });
-  it("rejects a bearer token that isn't the legacy token and isn't a known machine token", async () => {
+  it("rejects an unknown bearer token end to end", async () => {
     expect((await post("/v1/metrics", {}, "cs_nope")).status).toBe(401);
   });
 });
 
-describe("per-machine ingest tokens", () => {
+describe("machine tokens", () => {
   it("accepts a token from createMachineToken, rejects it after revoke", async () => {
     const { id, token } = await hub().createMachineToken("t");
     const sessionId = uid();
@@ -35,14 +30,7 @@ describe("per-machine ingest tokens", () => {
     expect(await hub().revoke("machine", id)).toBe(true);
     expect((await post("/events", validEvent, token)).status).toBe(401);
   });
-
-  it("still accepts the legacy INGEST_TOKEN", async () => {
-    const sessionId = uid();
-    const validEvent = { session_id: sessionId, event: "SessionStart", ts: Date.now() };
-    expect((await post("/events", validEvent, TOKEN)).status).toBe(204);
-  });
 });
-
 
 describe("clientKey", () => {
   const key = (ip?: string) => clientKey(new Request("http://localhost/", { headers: ip ? { "CF-Connecting-IP": ip } : {} }));

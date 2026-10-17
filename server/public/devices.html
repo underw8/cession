@@ -35,7 +35,6 @@
   .row > div { min-width: 0; }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub { color: var(--ink-3); font-size: 12px; }
-  .tag { font-size: 10px; background: var(--warn-bg); color: var(--warn-ink); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
   .empty { color: var(--ink-3); font-size: 12px; padding: 7px 0; border-top: 1px solid var(--line); margin: 0; }
   .once { background: var(--hover); border-radius: 8px; padding: 10px; margin: 6px 0; display: grid; gap: 6px; }
   .once pre { margin: 0; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
@@ -49,7 +48,7 @@
 <main class="panel">
   <div class="head"><h1>Devices</h1><a href="/">← Sessions</a></div>
 
-  <h2>Machines (ingest tokens)
+  <h2>Machines
     <form id="newtok"><input id="mname" placeholder="machine name" maxlength="64" aria-label="Machine name" required><button class="acc">+ New token</button></form></h2>
   <div id="token"></div>
   <div id="machines"></div>
@@ -91,10 +90,9 @@
     const res = await fetch("/api/devices");
     if (!res.ok) { location.replace("/login"); return; }
     const d = await res.json();
-    $("#machines").innerHTML = list([
-      ...(d.legacy_ingest ? [row(`INGEST_TOKEN<span class="tag">legacy</span>`, `remove with <code>npx wrangler secret delete INGEST_TOKEN</code>`)] : []),
-      ...d.machines.map((m) => row(esc(m.name), m.last_used ? `last event ${ago(m.last_used)}` : "never used", revoke("machine", m.id))),
-    ], "No machine tokens.");
+    $("#machines").innerHTML = list(
+      d.machines.map((m) => row(esc(m.name), m.last_used ? `last event ${ago(m.last_used)}` : "never used", revoke("machine", m.id))),
+      "No machine tokens.");
     $("#widgets").innerHTML = list(d.widgets.map((w) => row(esc(w.label), `paired ${ago(w.created_at)}`, revoke("widget", w.id))), "No paired widgets.");
     $("#browsers").innerHTML = list(d.browsers.map((b) =>
       row(`${esc(b.label)}${b.current ? " · this browser" : ""}`, `signed in ${ago(b.created_at)}`, revoke("browser", b.id, b.current ? "Sign out" : "Revoke"))), "No browsers.");

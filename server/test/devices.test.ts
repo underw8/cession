@@ -29,9 +29,8 @@ describe("devices", () => {
     expect(url).toBe(BASE);
     expect((await ingest(token)).status).toBe(204);
 
-    const list = (await (await call("/api/devices", { cookie: browser })).json()) as { machines: { id: string; name: string }[]; legacy_ingest: boolean };
+    const list = (await (await call("/api/devices", { cookie: browser })).json()) as { machines: { id: string; name: string }[] };
     expect(list.machines).toContainEqual(expect.objectContaining({ id, name: "work-mbp" }));
-    expect(list.legacy_ingest).toBe(true);
 
     expect((await call(`/api/devices/machine/${id}`, { method: "DELETE", cookie: browser })).status).toBe(204);
     expect((await ingest(token)).status).toBe(401);

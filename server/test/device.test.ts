@@ -30,7 +30,7 @@ describe("device login", () => {
     const res = await poll(s.device_code);
     expect(res.status).toBe(200);
     const { token } = (await res.json()) as { token: string };
-    expect(await hub().checkIngestToken(token)).toBe(true);
+    expect(await hub().checkMachineToken(token)).toBe(true);
     // The token descends from the approving session's passkey, so removing it revokes the machine.
     expect(await sql("SELECT 1 FROM machine_tokens WHERE name = ? AND passkey_id = 'pk-device'", name)).toHaveLength(1);
 

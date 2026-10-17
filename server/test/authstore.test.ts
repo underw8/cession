@@ -5,8 +5,8 @@ describe("machine tokens", () => {
   it("issues a cs_-prefixed token, verifies it, and rejects a tampered one", async () => {
     const { token } = await hub().createMachineToken("mini");
     expect(token.startsWith("cs_")).toBe(true);
-    expect(await hub().checkIngestToken(token)).toBe(true);
-    expect(await hub().checkIngestToken(`${token}x`)).toBe(false);
+    expect(await hub().checkMachineToken(token)).toBe(true);
+    expect(await hub().checkMachineToken(`${token}x`)).toBe(false);
 
     const machines = (await hub().devices(null)).machines;
     const mine = machines.find((m) => m.name === "mini");

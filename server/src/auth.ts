@@ -1,15 +1,10 @@
 import type { Session } from "./authstore";
 import type { Hub } from "./hub";
 
-export async function ingestAuthorized(req: Request, env: Env, hub: DurableObjectStub<Hub>): Promise<boolean> {
+/** Machine tokens are looked up by hash, so the comparison leaks no timing about the token. */
+export async function ingestAuthorized(req: Request, hub: DurableObjectStub<Hub>): Promise<boolean> {
   const auth = req.headers.get("Authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) return false;
-  if (env.INGEST_TOKEN) {
-    const got = new TextEncoder().encode(auth);
-    const want = new TextEncoder().encode(`Bearer ${env.INGEST_TOKEN}`);
-    if (got.byteLength === want.byteLength && crypto.subtle.timingSafeEqual(got, want)) return true;
-  }
-  return hub.checkIngestToken(auth.slice("Bearer ".length));
+  return auth.startsWith("Bearer ") && hub.checkMachineToken(auth.slice("Bearer ".length));
 }
 
 const isLocalhost = (req: Request) => ["localhost", "127.0.0.1"].includes(new URL(req.url).hostname);

@@ -114,7 +114,7 @@ describe("passkeys", () => {
     const other = await hub().createSession("browser", "other");
     expect((await fetchWith(`/api/devices/passkey/${id}`, { method: "DELETE", headers: { Cookie: `__Host-cession=${other}` } })).status).toBe(204);
     for (const raw of [first, second, (widget as { raw: string }).raw]) expect(await hub().getSession(raw)).toBeNull();
-    expect(await hub().checkIngestToken(token)).toBe(false);
+    expect(await hub().checkMachineToken(token)).toBe(false);
     expect((await hub().redeemPairingCode(pending.code, "w", "192.0.2.51")).status).toBe("bad");
     expect((await call("/api/sessions", undefined, other)).status).toBe(200);
   });

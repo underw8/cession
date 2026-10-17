@@ -3,12 +3,16 @@ import { env, exports } from "cloudflare:workers";
 import worker from "../src/index";
 import type { SessionRow, Snapshot } from "../src/hub";
 
-export const TOKEN = "test-token";
 export const BASE = "http://localhost";
 // The harness binds DEV_SKIP_AUTH=1; this env enforces the real session gate.
 export const authEnv = { ...env, DEV_SKIP_AUTH: undefined } as unknown as Env;
 
-export function post(path: string, body: unknown, token = TOKEN): Promise<Response> {
+let shared: Promise<string> | undefined;
+/** One machine token for every test that just needs to ingest. */
+export const machineToken = () => (shared ??= hub().createMachineToken("test").then((t) => t.token));
+
+export async function post(path: string, body: unknown, token?: string): Promise<Response> {
+  token ??= await machineToken();
   return exports.default.fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

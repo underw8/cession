@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import worker from "../src/index";
-import { BASE, TOKEN, asIncoming, authEnv as devEnv, fetchWith as fetchUnauthenticated, hub, resetFailures } from "./helpers";
+import { BASE, asIncoming, authEnv as devEnv, fetchWith as fetchUnauthenticated, hub, machineToken, resetFailures } from "./helpers";
 
 // Verifies the router enforces the session gate on every read route and never on ingest.
 
@@ -37,7 +37,7 @@ describe("session gate (DEV_SKIP_AUTH unset)", () => {
   it("does not gate ingest: POST /events still reaches validation with 400", async () => {
     const res = await fetchUnauthenticated("/events", {
       method: "POST",
-      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${await machineToken()}`, "Content-Type": "application/json" },
       body: "{}",
     });
     expect(res.status).toBe(400);

@@ -121,8 +121,8 @@ export class Hub extends DurableObject<Env> {
     return authstore.createMachineToken(this.sql, name, passkeyId);
   }
 
-  async checkIngestToken(token: string): Promise<boolean> {
-    return authstore.checkIngestToken(this.sql, token);
+  async checkMachineToken(token: string): Promise<boolean> {
+    return authstore.checkMachineToken(this.sql, token);
   }
 
   async createSession(kind: SessionKind, label: string, passkeyId: string | null = null): Promise<string> {
