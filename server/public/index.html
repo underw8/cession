@@ -182,11 +182,12 @@ function rowHtml(r, s) {
       </div>`;
 }
 
-// Bar mode's one-line summary per row: how long it has waited, run so far, or sat idle.
+// Bar mode's one-line summary per row: how long it has waited, run so far, or sat idle. Cost stays
+// in the panel; the bar only shows today's total.
 function barMeta(r) {
   if (r.status === "needs_you") return `waiting ${dur(Date.now() - (r.last_event || r.last_seen))}`;
   if (r.status === "idle") return `idle ${dur(Date.now() - (r.last_event || r.last_seen))}`;
-  return [r.started_at && dur(Date.now() - r.started_at), usd(r.cost_usd)].filter(Boolean).join(" · ");
+  return r.started_at ? dur(Date.now() - r.started_at) : "";
 }
 
 // Counts rows at least half cut off by the bar's right edge (or its fade), shown as "+N".
