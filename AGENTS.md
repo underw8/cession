@@ -20,7 +20,7 @@ sh plugin/test.sh      # end-to-end hook test against a running `npm run dev`; p
 cd widget && cargo build && cargo test
 ```
 
-CI (`.github/workflows/`): `ci.yml` runs the server tests, `plugin/test.sh` and (when `widget/` changes) the widget build on every PR; `deploy.yml` deploys on a published release; `quality_gate.yml` waits for a `SONAR_TOKEN` secret; `widget-release.yml` builds an unsigned `.dmg` on a `widget-v<version>` tag.
+CI (`.github/workflows/`): `ci.yml` runs the server tests, `plugin/test.sh` and (when `widget/` changes) the widget build on every PR; `quality_gate.yml` waits for a `SONAR_TOKEN` secret; `widget-release.yml` builds an unsigned `.dmg` on a `widget-v<version>` tag. Deploys stay manual: `make deploy`.
 
 **Before calling server work done, run `npm test` and `npm run typecheck` in `server/`. For widget work, run `cargo build` and `cargo test` in `widget/`.** No linter or formatter is configured.
 
