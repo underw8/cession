@@ -67,6 +67,10 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS sessions (
 )`;
 
 // Usage accrued per UTC day, so history counts spend on the day it happened, not the day a session started.
+// Digests of recent OTLP request bodies, so an exporter retry isn't counted twice.
+const BATCH_SCHEMA = `CREATE TABLE IF NOT EXISTS otlp_batches (hash TEXT PRIMARY KEY, at INTEGER NOT NULL)`;
+const BATCH_TTL_MS = 60 * 60_000;
+
 const USAGE_SCHEMA = `CREATE TABLE usage_daily (
   day                INTEGER NOT NULL,
   session_id         TEXT    NOT NULL,
@@ -110,6 +114,7 @@ export class Hub extends DurableObject<Env> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.sql.exec(SCHEMA);
     this.sql.exec(authstore.AUTH_SCHEMA);
+    this.sql.exec(BATCH_SCHEMA);
     authstore.migrateAuth(this.sql);
     // One transaction, so the table never exists without its backfill.
     if (!this.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = 'usage_daily'`).toArray().length) {
@@ -236,8 +241,14 @@ export class Hub extends DurableObject<Env> {
     if (status !== "ended") await this.ensureAlarm();
   }
 
-  async applyUsage(updates: UsageUpdate[]): Promise<void> {
+  /** batchHash identifies the request body; a body seen in the last hour is a retry and is skipped. */
+  async applyUsage(updates: UsageUpdate[], batchHash?: string): Promise<void> {
     const now = Date.now();
+    if (batchHash) {
+      this.sql.exec(`DELETE FROM otlp_batches WHERE at < ?`, now - BATCH_TTL_MS);
+      const fresh = this.sql.exec(`INSERT OR IGNORE INTO otlp_batches (hash, at) VALUES (?, ?)`, batchHash, now).rowsWritten > 0;
+      if (!fresh) return;
+    }
     for (const u of updates) {
       if (!USAGE_COLUMNS.includes(u.column)) continue;
       // last_event stays 0 on insert so any later hook event, even with a lagging clock, sets status.

@@ -10,19 +10,22 @@ function payload(opts: {
   cost?: { value: number; attrs: Attrs }[];
   tokens?: { value: number; attrs: Attrs }[];
   resource?: Attrs;
+  // Exporters stamp every point, so two real exports never share a body.
+  time?: number;
 }) {
+  const timeUnixNano = String((opts.time ?? 0) * 1_000_000);
   const metrics = [];
   if (opts.cost)
     metrics.push({
       name: "claude_code.cost.usage",
       sum: { aggregationTemporality: opts.temporality, isMonotonic: true,
-        dataPoints: opts.cost.map((p) => ({ asDouble: p.value, attributes: attrs(p.attrs) })) },
+        dataPoints: opts.cost.map((p) => ({ asDouble: p.value, timeUnixNano, attributes: attrs(p.attrs) })) },
     });
   if (opts.tokens)
     metrics.push({
       name: "claude_code.token.usage",
       sum: { aggregationTemporality: opts.temporality, isMonotonic: true,
-        dataPoints: opts.tokens.map((p) => ({ asInt: String(p.value), attributes: attrs(p.attrs) })) },
+        dataPoints: opts.tokens.map((p) => ({ asInt: String(p.value), timeUnixNano, attributes: attrs(p.attrs) })) },
     });
   metrics.push({ name: "claude_code.session.count", sum: { aggregationTemporality: opts.temporality, dataPoints: [{ asInt: "1" }] } });
   return { resourceMetrics: [{ resource: { attributes: attrs(opts.resource ?? {}) }, scopeMetrics: [{ metrics }] }] };
@@ -87,12 +90,21 @@ describe("POST /v1/metrics", () => {
     for (let i = 0; i < 2; i++)
       expect((await post("/v1/metrics", payload({
         temporality: 1,
+        time: Date.now() + i,
         cost: [{ value: 0.1, attrs: { "session.id": id } }],
         tokens: [{ value: 50, attrs: { "session.id": id, type: "input" } }],
       }))).status).toBe(200);
     const s = await liveSession(id);
     expect(s?.cost_usd).toBeCloseTo(0.2);
     expect(s?.tokens_in).toBe(100);
+  });
+
+  it("counts a retried delta export (identical body) once", async () => {
+    const id = uid();
+    await post("/events", { session_id: id, event: "SessionStart", ts: Date.now() });
+    const body = payload({ temporality: 1, time: Date.now(), cost: [{ value: 0.3, attrs: { "session.id": id } }] });
+    for (let i = 0; i < 3; i++) expect((await post("/v1/metrics", body)).status).toBe(200);
+    expect((await liveSession(id))?.cost_usd).toBeCloseTo(0.3);
   });
 
   it("a repeated cumulative export does not double count", async () => {

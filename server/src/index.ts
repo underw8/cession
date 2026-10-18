@@ -1,5 +1,5 @@
-import { clearCookie, clientKeys, ingestAuthorized, isWidget, readSession, sameOrigin, sessionCookie, status } from "./auth";
-import { DEVICE_TTL_MS, type DeviceKind, type Session } from "./authstore";
+import { clearCookie, clientKey, clientKeys, ingestAuthorized, isLocalhost, isWidget, readSession, sameOrigin, sessionCookie, status } from "./auth";
+import { DEVICE_TTL_MS, sha256hex, type DeviceKind, type Session } from "./authstore";
 import { parseEvent } from "./event";
 import { parseOtlp } from "./otlp";
 import { passkeyRoute } from "./passkey";
@@ -75,9 +75,15 @@ const INGEST: Record<string, Handler<Ctx>> = {
   },
   "POST /v1/metrics": async ({ req, hub }) => {
     if (!(await ingestAuthorized(req, hub))) return status(401, "unauthorized");
-    const body = await req.json().catch(() => undefined);
-    if (body === undefined) return status(400, "bad json");
-    await hub.applyUsage(parseOtlp(body));
+    const text = await req.text();
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return status(400, "bad json");
+    }
+    // An exporter retry resends the identical body; its digest lets the Hub count it once.
+    await hub.applyUsage(parseOtlp(body), await sha256hex(text));
     return Response.json({});
   },
 };
@@ -200,6 +206,12 @@ async function route(req: Request, env: Env): Promise<Response> {
   // CSRF check; /auth/pair is exempt because its pairing code is the credential.
   if ((req.method === "POST" || req.method === "DELETE") && !sameOrigin(req) && url.pathname !== "/auth/pair")
     return status(403, "forbidden origin");
+
+  // Local dev and tests have no real client address, so only deployed hosts are limited.
+  if (url.pathname.startsWith("/auth/") && !isLocalhost(req)) {
+    const { success } = await env.AUTH_LIMITER.limit({ key: clientKey(req) });
+    if (!success) return status(429, "too many requests");
+  }
 
   const open = PUBLIC[key];
   if (open) return open(c);

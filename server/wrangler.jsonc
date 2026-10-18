@@ -25,6 +25,15 @@
       ]
     }
   ],
+  // Caps /auth/* per client prefix in each Cloudflare location, before requests reach the Hub.
+  // namespace_id only has to be unique within your Cloudflare account.
+  "ratelimits": [
+    {
+      "name": "AUTH_LIMITER",
+      "namespace_id": "4271",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ],
   "workers_dev": true,
   "preview_urls": false,
 }

@@ -127,3 +127,18 @@ describe("security headers", () => {
     expectHeaders(res);
   });
 });
+
+describe("auth rate limit", () => {
+  it("answers 429 once a client exceeds the /auth/* budget on a deployed host", async () => {
+    const poll = () =>
+      worker.fetch(asIncoming(new Request("https://cession.example.com/auth/device/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.200" },
+        body: JSON.stringify({ device_code: "nope" }),
+      })), devEnv);
+    const codes: number[] = [];
+    for (let i = 0; i < 70; i++) codes.push((await poll()).status);
+    expect(codes.slice(0, 60).every((c) => c === 400)).toBe(true);
+    expect(codes).toContain(429);
+  });
+});
