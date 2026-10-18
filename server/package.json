@@ -1,6 +1,7 @@
 {
   "name": "cession-server",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --var DEV_SKIP_AUTH:1",

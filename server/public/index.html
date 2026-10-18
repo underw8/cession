@@ -130,7 +130,7 @@
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.codePointAt(0)};`);
+const esc = (v) => String(v ?? "").replaceAll(/[&<>"']/g, (c) => `&#${c.codePointAt(0)};`);
 const mins = (ms) => Math.max(0, Math.round(ms / 60000));
 const span = (m) => (m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`);
 const ago = (ms) => { const m = mins(Date.now() - ms); return m < 1 ? "now" : `${span(m)} ago`; };
@@ -220,7 +220,10 @@ function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live`);
   let heard = Date.now();
   const timer = setInterval(() => {
-    if (Date.now() - heard < STALE_MS) { if (ws.readyState === WebSocket.OPEN) ws.send("ping"); return; }
+    if (Date.now() - heard < STALE_MS) {
+      if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+      return;
+    }
     // close() on a dead socket can wait a long time for the handshake, so stop listening and move on.
     clearInterval(timer);
     ws.onclose = null;
