@@ -7,7 +7,7 @@ export async function ingestAuthorized(req: Request, hub: DurableObjectStub<Hub>
   return auth.startsWith("Bearer ") && hub.checkMachineToken(auth.slice("Bearer ".length));
 }
 
-const isLocalhost = (req: Request) => ["localhost", "127.0.0.1"].includes(new URL(req.url).hostname);
+export const isLocalhost = (req: Request) => ["localhost", "127.0.0.1"].includes(new URL(req.url).hostname);
 
 export async function readSession(
   req: Request,
