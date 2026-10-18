@@ -67,7 +67,7 @@
 </main>
 <script type="module">
   const $ = (s) => document.querySelector(s);
-  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.codePointAt(0)};`);
+  const esc = (v) => String(v ?? "").replaceAll(/[&<>"']/g, (c) => `&#${c.codePointAt(0)};`);
   const ago = (t) => {
     const m = Math.round((Date.now() - t) / 60000);
     if (m < 1) return "just now";

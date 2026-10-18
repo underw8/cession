@@ -112,7 +112,7 @@ export function pairingCode(): string {
   return [...bytes].map((b) => PAIRING_ALPHABET[b % PAIRING_ALPHABET.length]).join("");
 }
 
-export const normalizeCode = (input: string) => input.toUpperCase().replace(/[\s-]/g, "");
+export const normalizeCode = (input: string) => input.toUpperCase().replaceAll(/[\s-]/g, "");
 
 export async function createMachineToken(sql: SqlStorage, name: string, passkeyId: string | null): Promise<{ id: string; token: string }> {
   const token = randomToken("cs_");
