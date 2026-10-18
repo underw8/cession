@@ -50,7 +50,8 @@
   (saved ? document.getElementById("code") : urlInput).focus();
   document.getElementById("pair").addEventListener("submit", (e) => {
     e.preventDefault();
-    const url = urlInput.value.trim().replace(/\/+$/, "");
+    let url = urlInput.value.trim();
+    while (url.endsWith("/")) url = url.slice(0, -1);
     // The pairing code and session cookie must not cross plain HTTP; localhost is for dev.
     const { protocol, hostname } = new URL(url);
     const ok = protocol === "https:" || (protocol === "http:" && ["localhost", "127.0.0.1"].includes(hostname));

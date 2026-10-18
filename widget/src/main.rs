@@ -154,91 +154,26 @@ fn allow(paired: Option<&str>, url: &Url) -> (bool, Option<String>) {
 // and a borderless window's own resize zone is a few pixels and excludes the top edge.
 fn handle_mouse(window: &WebviewWindow) {
     let win: *const NSWindow = window.ns_window().unwrap().cast();
-    let id = unsafe { &*win }.windowNumber();
+    let w = unsafe { &*win };
     // Explicit false also catches clicks on the transparent pixels outside the rounded corners.
-    unsafe { &*win }.setIgnoresMouseEvents(false);
+    w.setIgnoresMouseEvents(false);
     // AppKit saves the frame on every move/resize; restore it explicitly after the builder placed the panel.
     let name = NSString::from_str("cession-widget");
-    unsafe { &*win }.setFrameAutosaveName(&name);
-    unsafe { &*win }.setFrameUsingName(&name);
-    let resizing: Cell<Option<(Edge, NSRect, NSPoint)>> = Cell::new(None);
-    let hovering = Cell::new(false);
-    // Last size of each mode. ponytail: in memory only, so the first toggle after a restart uses defaults.
-    let full = Cell::new(NSSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1));
-    let bar = Cell::new(NSSize::new(BAR_DEFAULT_WIDTH, BAR_HEIGHT));
-    let webview = window.clone();
+    w.setFrameAutosaveName(&name);
+    w.setFrameUsingName(&name);
+    let state = Mouse {
+        win,
+        id: w.windowNumber(),
+        resizing: Cell::new(None),
+        hovering: Cell::new(false),
+        // Last size of each mode. ponytail: in memory only, so the first toggle after a restart uses defaults.
+        full: Cell::new(NSSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)),
+        bar: Cell::new(NSSize::new(BAR_DEFAULT_WIDTH, BAR_HEIGHT)),
+        webview: window.clone(),
+    };
     let handler = RcBlock::new(move |ev: NonNull<NSEvent>| -> *mut NSEvent {
-        let e = unsafe { ev.as_ref() };
-        let win = unsafe { &*win };
-        // The tray icon is also an app window, so match ours by number.
-        if e.windowNumber() != id && resizing.get().is_none() {
-            return ev.as_ptr();
-        }
-        let frame = win.frame();
-        let p = e.locationInWindow();
-        // WebKit's own :hover is unreliable in an unfocused panel, so the native side drives it.
-        let kind = e.r#type();
-        if matches!(kind, NSEventType::MouseEntered | NSEventType::MouseExited | NSEventType::MouseMoved) {
-            let inside = contains(frame, NSEvent::mouseLocation());
-            if inside != hovering.replace(inside) {
-                let _ = webview.eval(format!("document.documentElement.classList.toggle('cession-hover', {inside})"));
-            }
-        }
-        match kind {
-            NSEventType::MouseMoved => {
-                if let Some(Hit::Resize(edge)) = hit(frame.size, p) {
-                    NSCursor::frameResizeCursorFromPosition_inDirections(
-                        cursor_position(edge),
-                        NSCursorFrameResizeDirections::All,
-                    )
-                    .set();
-                    return std::ptr::null_mut();
-                }
-            }
-            NSEventType::LeftMouseDown => {
-                let flags = e.modifierFlags();
-                let target = if flags.contains(NSEventModifierFlags::Option) {
-                    Some(Hit::Resize(nearest_corner(frame.size, p)))
-                } else if flags.contains(NSEventModifierFlags::Command) {
-                    Some(Hit::Move)
-                } else {
-                    hit(frame.size, p)
-                };
-                match target {
-                    Some(Hit::Resize(edge)) => resizing.set(Some((edge, frame, NSEvent::mouseLocation()))),
-                    Some(Hit::Move) => win.performWindowDragWithEvent(e),
-                    Some(Hit::NextScreen) => move_to_next_screen(win),
-                    Some(Hit::Toggle) => {
-                        let (from, to) = if frame.size.height <= BAR_MODE { (&bar, &full) } else { (&full, &bar) };
-                        from.set(frame.size);
-                        let screen = win.screen().map_or(frame, |s| s.visibleFrame());
-                        win.setFrame_display(toggled(frame, to.get(), screen), true);
-                    }
-                    Some(Hit::Hide) => {
-                        win.orderOut(None);
-                        // No exit event follows, so clear hover or the bar shows on the next Show.
-                        hovering.set(false);
-                        let _ = webview.eval("document.documentElement.classList.remove('cession-hover')");
-                    }
-                    None => return ev.as_ptr(),
-                }
-                return std::ptr::null_mut();
-            }
-            NSEventType::LeftMouseDragged => {
-                if let Some((edge, start, mouse)) = resizing.get() {
-                    let now = NSEvent::mouseLocation();
-                    win.setFrame_display(resized(start, edge, now.x - mouse.x, now.y - mouse.y), true);
-                    return std::ptr::null_mut();
-                }
-            }
-            NSEventType::LeftMouseUp => {
-                if resizing.take().is_some() {
-                    return std::ptr::null_mut();
-                }
-            }
-            _ => {}
-        }
-        ev.as_ptr()
+        // A handled event is swallowed so the webview never sees it.
+        if state.on_event(unsafe { ev.as_ref() }) { std::ptr::null_mut() } else { ev.as_ptr() }
     });
     let mask = NSEventMask::LeftMouseDown
         | NSEventMask::LeftMouseDragged
@@ -248,6 +183,109 @@ fn handle_mouse(window: &WebviewWindow) {
         | NSEventMask::MouseExited;
     let monitor = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &handler) };
     std::mem::forget(monitor); // lives for the whole app
+}
+
+/// What the local mouse monitor remembers between events.
+struct Mouse {
+    win: *const NSWindow,
+    id: isize,
+    resizing: Cell<Option<(Edge, NSRect, NSPoint)>>,
+    hovering: Cell<bool>,
+    full: Cell<NSSize>,
+    bar: Cell<NSSize>,
+    webview: WebviewWindow,
+}
+
+impl Mouse {
+    fn win(&self) -> &NSWindow {
+        unsafe { &*self.win }
+    }
+
+    /// True when the event was handled here and must not reach the webview.
+    fn on_event(&self, e: &NSEvent) -> bool {
+        // The tray icon is also an app window, so match ours by number.
+        if e.windowNumber() != self.id && self.resizing.get().is_none() {
+            return false;
+        }
+        let kind = e.r#type();
+        if matches!(kind, NSEventType::MouseEntered | NSEventType::MouseExited | NSEventType::MouseMoved) {
+            self.set_hover(contains(self.win().frame(), NSEvent::mouseLocation()));
+        }
+        match kind {
+            NSEventType::MouseMoved => self.on_move(e),
+            NSEventType::LeftMouseDown => self.on_down(e),
+            NSEventType::LeftMouseDragged => self.on_drag(),
+            NSEventType::LeftMouseUp => self.resizing.take().is_some(),
+            _ => false,
+        }
+    }
+
+    // WebKit's own :hover is unreliable in an unfocused panel, so the native side drives it.
+    fn set_hover(&self, inside: bool) {
+        if inside != self.hovering.replace(inside) {
+            let _ = self.webview.eval(format!("document.documentElement.classList.toggle('cession-hover', {inside})"));
+        }
+    }
+
+    fn on_move(&self, e: &NSEvent) -> bool {
+        let Some(Hit::Resize(edge)) = hit(self.win().frame().size, e.locationInWindow()) else {
+            return false;
+        };
+        NSCursor::frameResizeCursorFromPosition_inDirections(cursor_position(edge), NSCursorFrameResizeDirections::All).set();
+        true
+    }
+
+    fn on_down(&self, e: &NSEvent) -> bool {
+        let win = self.win();
+        let frame = win.frame();
+        let Some(target) = press_target(e.modifierFlags(), frame.size, e.locationInWindow()) else {
+            return false;
+        };
+        match target {
+            Hit::Resize(edge) => self.resizing.set(Some((edge, frame, NSEvent::mouseLocation()))),
+            Hit::Move => win.performWindowDragWithEvent(e),
+            Hit::NextScreen => move_to_next_screen(win),
+            Hit::Toggle => self.toggle(frame),
+            Hit::Hide => self.hide(),
+        }
+        true
+    }
+
+    fn on_drag(&self) -> bool {
+        let Some((edge, start, mouse)) = self.resizing.get() else {
+            return false;
+        };
+        let now = NSEvent::mouseLocation();
+        self.win().setFrame_display(resized(start, edge, now.x - mouse.x, now.y - mouse.y), true);
+        true
+    }
+
+    /// Switches between panel and bar, remembering the size of the mode being left.
+    fn toggle(&self, frame: NSRect) {
+        let win = self.win();
+        let (from, to) = if frame.size.height <= BAR_MODE { (&self.bar, &self.full) } else { (&self.full, &self.bar) };
+        from.set(frame.size);
+        let screen = win.screen().map_or(frame, |s| s.visibleFrame());
+        win.setFrame_display(toggled(frame, to.get(), screen), true);
+    }
+
+    fn hide(&self) {
+        self.win().orderOut(None);
+        // No exit event follows, so clear hover or the bar shows on the next Show.
+        self.hovering.set(false);
+        let _ = self.webview.eval("document.documentElement.classList.remove('cession-hover')");
+    }
+}
+
+/// What a press does: ⌥ resizes from the nearest corner, ⌘ moves, otherwise whatever is under the pointer.
+fn press_target(flags: NSEventModifierFlags, size: NSSize, p: NSPoint) -> Option<Hit> {
+    if flags.contains(NSEventModifierFlags::Option) {
+        Some(Hit::Resize(nearest_corner(size, p)))
+    } else if flags.contains(NSEventModifierFlags::Command) {
+        Some(Hit::Move)
+    } else {
+        hit(size, p)
+    }
 }
 
 /// Horizontal and vertical side of a grabbed edge: -1 left/bottom, 1 right/top, 0 neither.
@@ -404,6 +442,17 @@ fn clip_corners(window: &WebviewWindow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn press_target_modifiers() {
+        let size = NSSize::new(400.0, 600.0);
+        let middle = NSPoint::new(300.0, 100.0);
+        // ⌥ grabs the nearest corner, ⌘ moves, and a plain press in the body does nothing.
+        assert_eq!(press_target(NSEventModifierFlags::Option, size, middle), Some(Hit::Resize((1, -1))));
+        assert_eq!(press_target(NSEventModifierFlags::Command, size, middle), Some(Hit::Move));
+        assert_eq!(press_target(NSEventModifierFlags::empty(), size, middle), None);
+        assert_eq!(press_target(NSEventModifierFlags::empty(), size, NSPoint::new(200.0, 590.0)), hit(size, NSPoint::new(200.0, 590.0)));
+    }
 
     #[test]
     fn edges_and_resize() {
