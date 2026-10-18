@@ -29,6 +29,9 @@ check() {
     curl -s -o /dev/null -w '%{http_code}' --max-time 15 -K - -X POST "$url/events" -H 'Content-Type: application/json' -d '{}'
 }
 
+# Machine tokens are cs_ + base64url; anything else could smuggle options into curl's -K config.
+case "$(token)" in *[!A-Za-z0-9_-]*) fail "the token has unexpected characters; create a new one on the Devices page" ;; esac
+
 [ -n "$(token)" ] || sh "$here/login.sh" "$url"
 code=$(check) || code=000
 if [ "$code" = 401 ] && [ -z "${CESSION_TOKEN:-}" ]; then

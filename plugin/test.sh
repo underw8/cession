@@ -94,5 +94,9 @@ noop "black-holed server returns at once, silently" https://10.255.255.1
 noop "plain-http remote is a silent no-op" http://example.com
 for u in http://localhost:@evil.com http://127.0.0.1:80@evil.com; do noop "userinfo $u is a silent no-op" "$u"; done
 noop "unconfigured is a silent no-op" "" "{}"
+pwn=$(mktemp -u)
+CESSION_TOKEN="x\"
+output = \"$pwn" noop "a token that would inject curl config is refused" "$CESSION_URL"
+[ ! -e "$pwn" ] || { echo "FAIL: curl config injection wrote $pwn"; exit 1; }
 noop "garbage stdin is a silent no-op" "$CESSION_URL" "not json"
 echo PASS
