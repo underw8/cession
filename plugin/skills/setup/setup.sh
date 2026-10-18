@@ -14,7 +14,7 @@ yes=${2:-}
 fail() { echo "cession: $*" >&2; exit 1; }
 
 # The URL is used in shell commands and must not send the token over plain http.
-printf '%s' "$url" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$|^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$' ||
+printf '%s' "$url" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$|^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$' || # NOSONAR: plain http is accepted only for localhost dev
   fail "usage: setup.sh https://cession.<you>.workers.dev — the URL must be https (http only for localhost) and contain no unusual characters"
 
 for dep in jq curl; do
