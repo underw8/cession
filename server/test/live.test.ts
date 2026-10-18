@@ -9,7 +9,7 @@ async function connect() {
   const ws = res.webSocket!;
   ws.accept();
   const messages: Snapshot[] = [];
-  ws.addEventListener("message", (e) => { messages.push(JSON.parse(e.data as string)); });
+  ws.addEventListener("message", (e) => { if (e.data !== "pong") messages.push(JSON.parse(e.data as string)); });
   return { ws, messages };
 }
 
@@ -23,6 +23,15 @@ describe("GET /live", () => {
     await vi.waitFor(() =>
       expect(messages.at(-1)?.sessions.find((s) => s.id === id)?.status).toBe("working"),
     );
+    ws.close();
+  });
+
+  it("answers ping with pong, so clients can detect a silently dead socket", async () => {
+    const { ws } = await connect();
+    const pong = new Promise<string>((resolve) =>
+      ws.addEventListener("message", (e) => { if (e.data === "pong") resolve(e.data); }));
+    ws.send("ping");
+    await expect(pong).resolves.toBe("pong");
     ws.close();
   });
 

@@ -105,6 +105,9 @@ export class Hub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    // Answered at the edge without waking the Hub, so clients can keep idle sockets alive and
+    // notice a connection that died silently (sleep, network change, NAT timeout).
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.sql.exec(SCHEMA);
     this.sql.exec(authstore.AUTH_SCHEMA);
     authstore.migrateAuth(this.sql);

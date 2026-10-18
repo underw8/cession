@@ -200,22 +200,41 @@ function countHidden() {
 addEventListener("resize", countHidden);
 
 let delay = 1000;
+// A socket that dies silently never fires close, so ping it and give up when nothing comes back.
+const PING_MS = 30000, STALE_MS = 75000;
+
+async function reconnect() {
+  try {
+    const res = await fetch("/api/sessions", { redirect: "manual" });
+    // Only a lost session sends the page back through the gate; a 5xx keeps backing off.
+    if (res.status === 401 || res.status === 403) { location.reload(); return; }
+  } catch {
+    // Server is down, not an expired session; keep backing off.
+  }
+  $("#conn").textContent = "reconnecting…";
+  setTimeout(connect, delay);
+  delay = Math.min(delay * 2, 30000);
+}
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live`);
-  ws.onopen = () => { delay = 1000; $("#conn").textContent = "live"; };
-  ws.onmessage = (e) => { snapshot = JSON.parse(e.data); renderLive(); };
-  ws.onclose = async () => {
-    try {
-      const res = await fetch("/api/sessions", { redirect: "manual" });
-      // Only a lost session sends the page back through the gate; a 5xx keeps backing off.
-      if (res.status === 401 || res.status === 403) { location.reload(); return; }
-    } catch {
-      // Server is down, not an expired session; keep backing off.
-    }
-    $("#conn").textContent = "reconnecting…";
-    setTimeout(connect, delay);
-    delay = Math.min(delay * 2, 30000);
+  let heard = Date.now();
+  const timer = setInterval(() => {
+    if (Date.now() - heard < STALE_MS) { if (ws.readyState === WebSocket.OPEN) ws.send("ping"); return; }
+    // close() on a dead socket can wait a long time for the handshake, so stop listening and move on.
+    clearInterval(timer);
+    ws.onclose = null;
+    ws.close();
+    reconnect();
+  }, PING_MS);
+  ws.onopen = () => { delay = 1000; heard = Date.now(); $("#conn").textContent = "live"; };
+  ws.onmessage = (e) => {
+    heard = Date.now();
+    if (e.data === "pong") return;
+    snapshot = JSON.parse(e.data);
+    renderLive();
   };
+  ws.onclose = () => { clearInterval(timer); reconnect(); };
 }
 
 // Day keys from the API are UTC dates.
