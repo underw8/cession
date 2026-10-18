@@ -138,6 +138,8 @@ jobs:
             ')
             [ -n "$ROWS" ] || continue
             [ "$LEVEL" = ERROR ] && TITLE=":x: Failed Conditions" || TITLE=":warning: Warning Conditions"
+            # Also in the log: the step summary isn't readable through the API.
+            printf '%s\n%s\n' "$TITLE" "$ROWS"
             {
               echo "### ${TITLE}"
               echo "| Metric | Actual | Threshold |"
