@@ -1,0 +1,62 @@
+name: Bug Report
+description: Something in cession is broken
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Ran /cession:setup https://cession.<you>.workers.dev
+        2. Approved the code on /device
+        3. Session never showed up on the dashboard
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Dashboard (live sessions, history, bar mode)
+        - Widget (macOS panel, pairing, tray)
+        - Plugin hooks (report.sh, session status)
+        - Setup / device login (/cession:setup, login.sh, /device)
+        - Server auth (passkeys, machine tokens, lockout)
+        - Cost / metrics (OTel, usage history)
+        - Deployment (Cloudflare Worker, wrangler)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Plugin version (from /plugin), macOS version for widget issues, and the deployed commit if you know it.
+      placeholder: "plugin 0.3.0, macOS 15.4"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
+      description: |
+        Dashboard or widget screenshot, `npx wrangler tail` output, or the browser console.
+        Never paste a machine token, session cookie or SETUP_CODE.
+      render: shell

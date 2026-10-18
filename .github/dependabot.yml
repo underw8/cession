@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    # One PR per week for minor and patch bumps; majors arrive separately.
+    groups:
+      server:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /widget
+    schedule:
+      interval: weekly
+    groups:
+      widget:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,77 @@
+name: Trivy Vulnerability Scan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "server/package.json"
+      - "server/package-lock.json"
+      - "widget/Cargo.toml"
+      - "widget/Cargo.lock"
+      - ".github/workflows/trivy.yml"
+  push:
+    branches: [main]
+    paths:
+      - "server/package-lock.json"
+      - "widget/Cargo.lock"
+      - ".github/workflows/trivy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Lockfile Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Reads server/package-lock.json and widget/Cargo.lock; nothing needs installing.
+      - name: Run Trivy
+        id: trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+          format: table
+          output: trivy-results.txt
+          version: v0.76.0
+
+      - name: Upload Trivy results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-scan-results
+          path: trivy-results.txt
+          if-no-files-found: ignore
+
+      - name: Trivy Summary
+        if: always()
+        env:
+          TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+        run: |
+          {
+            echo "## Trivy Vulnerability Scan"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$TRIVY_OUTCOME" = "failure" ] && grep -q "Total:" trivy-results.txt 2>/dev/null; then
+            {
+              echo ":x: **CRITICAL or HIGH vulnerabilities with a fix available**"
+              echo ""
+              echo "<details><summary>Findings</summary>"
+              echo ""
+              echo '```'
+              cat trivy-results.txt
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          elif [ "$TRIVY_OUTCOME" = "failure" ]; then
+            echo ":warning: **Trivy failed to run.** Check the step log." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo ":white_check_mark: No fixable CRITICAL or HIGH vulnerabilities." >> "$GITHUB_STEP_SUMMARY"

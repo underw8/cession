@@ -55,7 +55,8 @@ code=$(sed -n 's/.*code: //p' "$out")
 curl -sf -o /dev/null -X POST "$CESSION_URL/api/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$code\"}" || { echo "FAIL: approve"; exit 1; }
 wait "$login" || { echo "FAIL: login.sh: $(cat "$out")"; exit 1; }
 grep -q "$CESSION_TOKEN" "$cfg/cession/token" && { echo "FAIL: login wrote the old token"; exit 1; }
-[ "$(stat -f %Lp "$cfg/cession/token" 2>/dev/null || stat -c %a "$cfg/cession/token")" = 600 ] || { echo "FAIL: token file not 600"; exit 1; }
+# GNU stat first: BSD's -f means a format there but filesystem mode on Linux.
+[ "$(stat -c %a "$cfg/cession/token" 2>/dev/null || stat -f %Lp "$cfg/cession/token")" = 600 ] || { echo "FAIL: token file not 600"; exit 1; }
 grep -q "$(cat "$cfg/cession/token")" "$out" && { echo "FAIL: login.sh printed the token"; exit 1; }
 sid="$sid-login"
 printf '{"session_id":"%s","hook_event_name":"SessionStart","cwd":"%s"}' "$sid" "$here" |

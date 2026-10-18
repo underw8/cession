@@ -1,0 +1,154 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: quality-gate-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Idles until a SONAR_TOKEN secret exists, so forks and a fresh repo stay green.
+  enabled:
+    name: Check Sonar Setup
+    runs-on: ubuntu-latest
+    outputs:
+      sonar: ${{ steps.check.outputs.sonar }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
+        run: echo "sonar=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+
+  quality_gate:
+    name: SonarQube Quality Gate
+    needs: enabled
+    if: needs.enabled.outputs.sonar == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Sonar needs full history for SCM blame; a shallow clone silently
+          # degrades new-code detection and issue authorship.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      # Deferred, not fatal: the scan and both summaries still run, and the last
+      # step re-raises, so one red test still reports everything it can.
+      - name: Run tests with coverage
+        id: tests
+        continue-on-error: true
+        working-directory: server
+        run: npm run coverage
+
+      # lcov paths are relative to server/; absolute paths resolve from any base directory.
+      - name: Make coverage paths absolute
+        if: always() && hashFiles('server/coverage/lcov.info') != ''
+        working-directory: server
+        run: sed -i "s#^SF:src/#SF:$PWD/src/#" coverage/lcov.info
+
+      - name: Test Summary
+        if: always() && steps.tests.outcome != 'skipped'
+        env:
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          if [ "$TESTS_OUTCOME" = "failure" ]; then
+            ICON=":x:"; DETAIL="**Tests failed** — check the logs above for details."
+          else
+            ICON=":white_check_mark:"; DETAIL="All tests passed."
+          fi
+          {
+            echo "## Unit Tests ${ICON}"
+            echo ""
+            echo "${DETAIL}"
+            echo ""
+            echo "---"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
+
+      # The scan action only reports scanner failures. This is what makes a
+      # failed gate fail the build.
+      - name: SonarQube Quality Gate check
+        id: quality_gate
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1
+        timeout-minutes: 5
+
+      - name: Quality Gate Summary
+        if: always()
+        env:
+          QG_STATUS: ${{ steps.quality_gate.outputs.quality-gate-status }}
+        run: |
+          REPORT=".scannerwork/report-task.txt"
+          if [ ! -f "$REPORT" ]; then
+            {
+              echo "## Quality Gate :warning:"
+              echo ""
+              echo ":warning: Scanner report not found — the scan itself failed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            # The scan step is already red; failing here too would bury the cause.
+            exit 0
+          fi
+
+          PROJECT_KEY=$(grep "^projectKey=" "$REPORT" | cut -d'=' -f2-)
+          DASHBOARD_URL=$(grep "^dashboardUrl=" "$REPORT" | cut -d'=' -f2-)
+
+          # The action reports PASSED/FAILED, so green must be opt-in: anything
+          # unrecognised, including an empty value from a skipped check, is red.
+          STATUS_ICON=":x:"
+          [ "$QG_STATUS" = "PASSED" ] && STATUS_ICON=":white_check_mark:"
+          [ "$QG_STATUS" = "WARN" ]   && STATUS_ICON=":warning:"
+
+          {
+            echo "## Quality Gate ${STATUS_ICON} (${QG_STATUS:-UNKNOWN})"
+            echo ""
+            echo "**Project:** \`${PROJECT_KEY}\`  "
+            echo "**Dashboard:** ${DASHBOARD_URL}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          RESPONSE=$(curl -sf -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" || echo "{}")
+
+          for LEVEL in ERROR WARN; do
+            ROWS=$(echo "$RESPONSE" | jq -r --arg level "$LEVEL" '
+              .projectStatus.conditions[]?
+              | select(.status == $level)
+              | "| \(.metricKey) | \(.actualValue) | \(.comparator) \(.errorThreshold) |"
+            ')
+            [ -n "$ROWS" ] || continue
+            [ "$LEVEL" = ERROR ] && TITLE=":x: Failed Conditions" || TITLE=":warning: Warning Conditions"
+            {
+              echo "### ${TITLE}"
+              echo "| Metric | Actual | Threshold |"
+              echo "|--------|--------|-----------|"
+              echo "$ROWS"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Fail if tests failed
+        if: always() && steps.tests.outcome == 'failure'
+        run: |
+          echo "::error::Unit tests failed — fix the failing tests before merging."
+          exit 1

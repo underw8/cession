@@ -1,0 +1,80 @@
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag or SHA to deploy
+        required: true
+
+permissions:
+  contents: read
+
+# Never cancel or overlap a deploy.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Worker
+    # Forks and self-hosters deploy their own copy; they don't have these secrets.
+    if: github.repository == 'underw8/cession'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.CESSION_URL }}
+    env:
+      TARGET: ${{ github.event.release.tag_name || inputs.ref }}
+      CESSION_URL: ${{ vars.CESSION_URL }}
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      # Same gate as `make deploy`: nothing ships that doesn't typecheck and pass.
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Deploy
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Checks the new code is live: /auth/device only exists in it, and the gate still guards /.
+      - name: Smoke check
+        run: |
+          [ -n "$CESSION_URL" ] || { echo "::error::Set the CESSION_URL repository variable"; exit 1; }
+          for _ in $(seq 1 10); do
+            device=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CESSION_URL/auth/device" -H 'Content-Type: application/json' -d '{}')
+            gate=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$CESSION_URL/")
+            if [ "$device" = 400 ] && [ "${gate%% *}" = 302 ] && case "$gate" in *"/login"*) true ;; *) false ;; esac; then
+              echo "ok: /auth/device → $device, / → $gate"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::Smoke check failed: /auth/device → $device, / → $gate"; exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Deploy ${{ job.status == 'success' && ':white_check_mark:' || ':x:' }}"
+            echo ""
+            echo "**Ref:** \`$TARGET\` ($(git rev-parse --short HEAD))  "
+            echo "**URL:** $CESSION_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

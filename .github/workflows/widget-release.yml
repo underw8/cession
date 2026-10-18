@@ -1,0 +1,58 @@
+name: Widget Release
+
+on:
+  push:
+    tags: ["widget-v*"]
+
+# Creating the release and uploading the .dmg need write access to contents.
+permissions:
+  contents: write
+
+concurrency:
+  group: widget-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & Publish macOS Widget
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: widget
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A tag that disagrees with the app version would ship a mislabeled build.
+      - name: Check tag matches tauri.conf.json
+        run: |
+          VERSION=$(jq -r .version tauri.conf.json)
+          [ "$TAG" = "widget-v$VERSION" ] || { echo "::error::Tag $TAG doesn't match widget version $VERSION"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: widget
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # Builds for the runner's arch (Apple silicon). Unsigned: no Developer ID is configured.
+      - name: Build
+        run: cargo tauri build --bundles dmg
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DMG=$(ls target/release/bundle/dmg/*.dmg)
+          gh release create "$TAG" "$DMG" --title "Widget $VERSION" --notes "macOS widget $VERSION for Apple silicon.
+
+          This build isn't signed. The first time, right-click the app in Applications and choose Open."
+          {
+            echo "## Widget $VERSION :white_check_mark:"
+            echo ""
+            echo "**Asset:** \`$(basename "$DMG")\`"
+          } >> "$GITHUB_STEP_SUMMARY"

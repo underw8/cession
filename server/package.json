@@ -6,6 +6,7 @@
     "dev": "wrangler dev --var DEV_SKIP_AUTH:1",
     "deploy": "wrangler deploy",
     "test": "vitest run",
+    "coverage": "vitest run --coverage",
     "types": "wrangler types",
     "typecheck": "wrangler types >/dev/null && tsc --noEmit && tsc --noEmit -p test"
   },
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.2",
+    "@vitest/coverage-istanbul": "5.0.4",
     "typescript": "^5.9.0",
     "vitest": "^5.0.4",
     "wrangler": "^4.151.0"

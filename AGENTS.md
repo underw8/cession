@@ -10,6 +10,7 @@ Live view and cost history of every Claude Code session across one person's mach
 cd server
 npm install
 npm test               # vitest in workerd via @cloudflare/vitest-plugin
+npm run coverage       # same, plus Istanbul lcov in server/coverage/ (what Sonar reads)
 npm run typecheck      # regenerates worker-configuration.d.ts (gitignored), then tsc for src and test
 npm run dev            # wrangler dev on http://localhost:8787, auth bypassed for localhost
 npm run deploy
@@ -18,6 +19,8 @@ sh plugin/test.sh      # end-to-end hook test against a running `npm run dev`; p
 
 cd widget && cargo build && cargo test
 ```
+
+CI (`.github/workflows/`): `ci.yml` runs the server tests, `plugin/test.sh` and (when `widget/` changes) the widget build on every PR; `deploy.yml` deploys on a published release; `quality_gate.yml` waits for a `SONAR_TOKEN` secret; `widget-release.yml` builds an unsigned `.dmg` on a `widget-v<version>` tag.
 
 **Before calling server work done, run `npm test` and `npm run typecheck` in `server/`. For widget work, run `cargo build` and `cargo test` in `widget/`.** No linter or formatter is configured.
 

@@ -9,4 +9,5 @@ widget/gen/
 docs/superpowers/
 server/worker-configuration.d.ts
 .scannerwork/
+coverage/
 .vscode/

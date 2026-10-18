@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (e.g. rapid PR pushes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      widget: ${{ steps.filter.outputs.widget }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            widget:
+              - 'widget/**'
+              - '.github/workflows/ci.yml'
+
+  server:
+    name: Server — Typecheck & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      # Also regenerates worker-configuration.d.ts, which is gitignored.
+      - run: npm run typecheck
+      - run: npm test
+
+  plugin:
+    name: Plugin — End-to-End Hook Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+      # localhost only: DEV_SKIP_AUTH bypasses the gate for localhost requests.
+      - name: Start wrangler dev
+        working-directory: server
+        run: |
+          npm run dev > "$RUNNER_TEMP/wrangler.log" 2>&1 &
+          for _ in $(seq 1 60); do curl -s -o /dev/null http://localhost:8787/ && exit 0; sleep 1; done
+          cat "$RUNNER_TEMP/wrangler.log"; exit 1
+      - name: Run plugin/test.sh
+        run: sh plugin/test.sh
+      - name: Show wrangler log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/wrangler.log"
+
+  widget:
+    name: Widget — Build & Test (macOS)
+    needs: changes
+    # macOS minutes are expensive on private repos; only run when the widget changes.
+    if: needs.changes.outputs.widget == 'true'
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: widget
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: widget
+      - run: cargo build
+      - run: cargo test

@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "identifier": "me.caidu.cession.widget",
   "build": { "frontendDist": "./ui" },
-  "app": { "windows": [] }
+  "app": { "windows": [] },
+  "bundle": { "active": true, "targets": ["app", "dmg"], "icon": ["icons/icon.png"], "category": "DeveloperTool" }
 }
