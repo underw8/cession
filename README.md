@@ -2,6 +2,10 @@
 
 See every Claude Code session on all your machines in one place. For each session it shows the machine, project and branch, whether it's working, waiting on you or idle, and what it costs. It also keeps daily and per-project cost history.
 
+<p align="center">
+  <img src="docs/images/dashboard.png" width="420" alt="The cession dashboard: one session waiting for you, three working and one idle, each with its machine, branch, run time and cost; today's cost against a 7-day bar chart; and the daily history table.">
+</p>
+
 ```
 Claude Code ── hooks ──> POST /events ─────┐
 Claude Code ── OTel ───> POST /v1/metrics ─┤
@@ -58,6 +62,8 @@ The hook needs `jq` and `curl`. To override the machine name, set `CESSION_MACHI
 - **Widget:** download the newest `.dmg` from Releases, or `git pull` and `make widget`.
 
 ## macOS widget
+
+![The widget in bar mode: one line per session with its run time and cost, and today's total. The amber tint pulses while a session is waiting for you.](docs/images/widget-bar.png)
 
 Download the `.dmg` from the latest [widget release](https://github.com/underw8/cession/releases?q=widget) (Apple silicon), open it and drag **cession-widget** to Applications. The build isn't signed, so the first time, right-click the app in Applications and choose **Open**, then confirm. Or build it yourself:
 
