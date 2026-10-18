@@ -97,7 +97,7 @@ fn main() {
             // Accessory apps have no Dock icon or menu bar, so the tray is the only way out.
             let show = MenuItem::with_id(app, "show", "Show cession", true, None::<&str>)?;
             let pair = MenuItem::with_id(app, "pair", "Pair with server…", true, None::<&str>)?;
-            let reload = MenuItem::with_id(app, "reload", "Reload dashboard", true, None::<&str>)?;
+            let reload = MenuItem::with_id(app, "reload", "Reload status", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit cession", true, None::<&str>)?;
             TrayIconBuilder::new()
                 .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)

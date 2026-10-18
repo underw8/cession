@@ -8,3 +8,5 @@ widget/gen/
 .superpowers/
 docs/superpowers/
 server/worker-configuration.d.ts
+.scannerwork/
+.vscode/

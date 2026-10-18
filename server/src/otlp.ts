@@ -23,28 +23,41 @@ const MAX_ID = 256;
 const list = <T>(v: unknown): T[] => (Array.isArray(v) ? v : []);
 const attr = (attrs: Attr[] | undefined, key: string) => list<Attr>(attrs).find((a) => a.key === key)?.value?.stringValue;
 
+const COST_METRIC = "claude_code.cost.usage";
+const TOKEN_METRIC = "claude_code.token.usage";
+
+function columnFor(m: Metric, p: Point): UsageColumn | undefined {
+  if (m.name === COST_METRIC) return "cost_usd";
+  const type = attr(p.attributes, "type") ?? "";
+  return Object.hasOwn(TOKEN_COLUMN, type) ? TOKEN_COLUMN[type] : undefined;
+}
+
+/** The update one data point carries, or null when it isn't a usable Claude Code point. */
+function pointUpdate(m: Metric, p: Point, resourceSession: string | undefined): UsageUpdate | null {
+  const sessionId = attr(p.attributes, "session.id") ?? resourceSession;
+  const column = columnFor(m, p);
+  const value = Number(p.asDouble ?? p.asInt ?? 0);
+  // Counters never go down, so a negative value is junk.
+  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0) return null;
+  return { sessionId, column, value, mode: m.sum?.aggregationTemporality === 2 ? "set" : "add" };
+}
+
 /** Sums Claude Code cost/token points per session and column. Cumulative (2) → "set", otherwise "add". */
 export function parseOtlp(body: unknown): UsageUpdate[] {
-  const totals = new Map<string, UsageUpdate>();
-  for (const rm of list<{ resource?: { attributes?: Attr[] }; scopeMetrics?: unknown }>((body as any)?.resourceMetrics)) {
+  const points = list<{ resource?: { attributes?: Attr[] }; scopeMetrics?: unknown }>((body as any)?.resourceMetrics).flatMap((rm) => {
     const resourceSession = attr(rm?.resource?.attributes, "session.id");
-    for (const sm of list<{ metrics?: unknown }>(rm?.scopeMetrics)) {
-      for (const m of list<Metric>(sm?.metrics)) {
-        const isCost = m?.name === "claude_code.cost.usage";
-        if (!isCost && m?.name !== "claude_code.token.usage") continue;
-        const mode = m.sum?.aggregationTemporality === 2 ? "set" : "add";
-        for (const p of list<Point>(m.sum?.dataPoints)) {
-          const sessionId = attr(p.attributes, "session.id") ?? resourceSession;
-          const column = isCost ? "cost_usd" : TOKEN_COLUMN[attr(p.attributes, "type") ?? ""];
-          const value = Number(p.asDouble ?? p.asInt ?? 0);
-          if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0) continue; // counters never go down
-          const key = `${sessionId}\n${column}`;
-          const u = totals.get(key) ?? { sessionId, column, value: 0, mode };
-          u.value += value;
-          totals.set(key, u);
-        }
-      }
-    }
+    return list<{ metrics?: unknown }>(rm?.scopeMetrics)
+      .flatMap((sm) => list<Metric>(sm?.metrics))
+      .filter((m) => m?.name === COST_METRIC || m?.name === TOKEN_METRIC)
+      .flatMap((m) => list<Point>(m.sum?.dataPoints).map((p) => pointUpdate(m, p, resourceSession)));
+  });
+  const totals = new Map<string, UsageUpdate>();
+  for (const u of points) {
+    if (!u) continue;
+    const key = `${u.sessionId}\n${u.column}`;
+    const seen = totals.get(key);
+    if (seen) seen.value += u.value;
+    else totals.set(key, u);
   }
   return [...totals.values()];
 }

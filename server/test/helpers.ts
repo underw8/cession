@@ -36,7 +36,7 @@ export const sql = <T extends Record<string, SqlStorageValue>>(query: string, ..
 export const row = async (id: string) => (await sql<SessionRow>("SELECT * FROM sessions WHERE id = ?", id))[0];
 
 export async function liveSession(id: string): Promise<SessionRow | undefined> {
-  const snap = (await (await get("/api/sessions")).json()) as Snapshot;
+  const snap = await (await get("/api/sessions")).json<Snapshot>();
   return snap.sessions.find((s) => s.id === id);
 }
 

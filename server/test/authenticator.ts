@@ -34,7 +34,7 @@ function rawToDer(raw: Uint8Array): Uint8Array {
 /** In-memory ES256 platform authenticator with "none" attestation, for driving the passkey routes in tests. */
 export class SoftAuthenticator {
   private counter = 0;
-  private constructor(private keys: CryptoKeyPair, readonly id: Uint8Array) {}
+  private constructor(private readonly keys: CryptoKeyPair, readonly id: Uint8Array) {}
 
   static async create(): Promise<SoftAuthenticator> {
     const keys = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"])) as CryptoKeyPair;

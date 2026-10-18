@@ -48,7 +48,7 @@ export function clientKey(req: Request, bits: 64 | 48 = 64): string {
   if (mapped && !isV4(tail)) return "unknown";
   const groups = v6Groups(mapped ? `${ip.slice(0, -tail.length)}0:0` : ip);
   if (!groups) return "unknown";
-  return mapped ? tail : `${groups.slice(0, bits / 16).map((g) => parseInt(g, 16).toString(16)).join(":")}::/${bits}`;
+  return mapped ? tail : `${groups.slice(0, bits / 16).map((g) => Number.parseInt(g, 16).toString(16)).join(":")}::/${bits}`;
 }
 
 const isV4 = (s: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s) && s.split(".").every((o) => Number(o) <= 255);
@@ -62,5 +62,5 @@ function v6Groups(ip: string): string[] | null {
   if (!parts.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
   if (right === undefined) return parts.length === 8 ? parts : null;
   if (parts.length > 7) return null;
-  return [...left, ...Array(8 - parts.length).fill("0"), ...right];
+  return [...left, ...new Array(8 - parts.length).fill("0"), ...right];
 }

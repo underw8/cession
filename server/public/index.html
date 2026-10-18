@@ -73,10 +73,10 @@
       --good-ink: #7ee07e; --warn-icon: #fab219; --warn-ink: #ffd479; --warn-bg: #fab21926;
     }
     body { padding: 0; }
-    .panel { max-width: none; height: 100vh; border-radius: 0; box-shadow: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; }
+    /* isolation keeps the heartbeat tint (::before, z-index -1) above the panel's own background. */
+    .panel { max-width: none; height: 100vh; border-radius: 0; box-shadow: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; position: relative; isolation: isolate; }
     /* Waiting on the user: the amber tint pulses like Mazda's heartbeat turn signal: it
        snaps on, then fades out slowly. */
-    .panel { position: relative; isolation: isolate; }
     .panel:has(.chip.needs_you)::before { content: ""; position: absolute; inset: 0; z-index: -1; background: #fab219; opacity: .14; animation: heartbeat 1s infinite; }
     /* One beat per second (60 bpm); the fade runs the whole interval, with no hold before the next beat. */
     @keyframes heartbeat {
@@ -128,9 +128,9 @@
   </details>
 </main>
 
-<script>
+<script type="module">
 const $ = (s) => document.querySelector(s);
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.codePointAt(0)};`);
 const mins = (ms) => Math.max(0, Math.round(ms / 60000));
 const span = (m) => (m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`);
 const ago = (ms) => { const m = mins(Date.now() - ms); return m < 1 ? "now" : `${span(m)} ago`; };
@@ -152,26 +152,34 @@ function renderLive() {
   for (const r of snapshot.sessions) c[r.status] = (c[r.status] ?? 0) + 1;
   // LABEL's key order is urgency order: needs you, then working, then idle.
   const present = Object.keys(LABEL).filter((s) => c[s]);
-  document.title = present.length ? `${present.map((s) => `${c[s]} ${LABEL[s].toLowerCase()}`).join(" · ")} — cession` : "cession";
+  const summary = present.map((s) => `${c[s]} ${LABEL[s].toLowerCase()}`).join(" · ");
+  document.title = summary ? `${summary} — cession` : "cession";
   $("#chips").innerHTML = present
     .map((s) => `<span class="chip ${s}" title="${c[s]} ${LABEL[s].toLowerCase()}">${ICON[s]}${c[s]}<span class="label"> ${LABEL[s].toLowerCase()}</span></span>`).join("");
   if (!snapshot.sessions.length) { $("#live").innerHTML = `<p class="empty">No live sessions.</p>`; countHidden(); return; }
-  // last_event is the latest hook (status change); last_seen also moves on metric exports.
-  const since = (r) => r.last_event || r.last_seen;
   // Within a group, the longest-waiting session is on top.
   const rows = [...snapshot.sessions].sort((a, b) => since(a) - since(b));
   const groups = present.map((s) => [s, rows.filter((r) => r.status === s)]);
-  $("#live").innerHTML = groups.map(([s, list]) => `
-    <div class="group"><h2>${LABEL[s]}</h2>${list.map((r) => `
+  $("#live").innerHTML = groups.map(([s, list]) => `<div class="group"><h2>${LABEL[s]}</h2>${list.map((r) => rowHtml(r, s)).join("")}</div>`).join("");
+  countHidden();
+}
+
+// last_event is the latest hook (status change); last_seen also moves on metric exports.
+const since = (r) => r.last_event || r.last_seen;
+
+function rowHtml(r, s) {
+  const branch = r.branch ? `<span>${esc(r.branch)}</span>` : "";
+  const up = r.started_at ? ` · up ${dur(Date.now() - r.started_at)}` : "";
+  const when = s === "needs_you" ? `waiting ${dur(Date.now() - since(r))}` : ago(since(r));
+  return `
       <div class="row ${s}" title="${esc(r.cwd)}">
         ${ICON[s]}
-        <div><div class="title">${esc(r.project ?? "—")}${r.branch ? `<span>${esc(r.branch)}</span>` : ""}</div>
-          <div class="sub">${esc(r.machine ?? "unknown machine")}${r.started_at ? ` · up ${dur(Date.now() - r.started_at)}` : ""}</div>
+        <div><div class="title">${esc(r.project ?? "—")}${branch}</div>
+          <div class="sub">${esc(r.machine ?? "unknown machine")}${up}</div>
           <span class="meta">${barMeta(r)}</span></div>
         <div class="right"><div class="cost">${usd(r.cost_usd)}</div>
-          <div class="when">${s === "needs_you" ? `waiting ${dur(Date.now() - since(r))}` : ago(since(r))}</div></div>
-      </div>`).join("")}</div>`).join("");
-  countHidden();
+          <div class="when">${when}</div></div>
+      </div>`;
 }
 
 // Bar mode's one-line summary per row: how long it has waited, run so far, or sat idle.
@@ -231,9 +239,11 @@ async function loadWeek() {
     $("#spark").innerHTML = days.map((d, i) => {
       const h = (d.cost / max) * (H - 4), x = i * bw + 4, w = bw - 8;
       const tip = esc(`<b>${d.key}</b><br>${usd(d.cost)} · ${d.sessions} sessions`);
-      return `<rect x="${i * bw}" y="0" width="${bw}" height="${H}" fill="transparent" data-tip="${tip}"/>` + (h
-        ? `<path d="M${x},${H} V${H - h + 3} q0,-3 3,-3 h${w - 6} q3,0 3,3 V${H} Z" fill="var(${i === days.length - 1 ? "--bar-today" : "--bar"})" pointer-events="none"/>`
-        : `<rect x="${x}" y="${H - 1}" width="${w}" height="1" fill="var(--line)"/>`);
+      const fill = i === days.length - 1 ? "--bar-today" : "--bar";
+      const mark = h
+        ? `<path d="M${x},${H} V${H - h + 3} q0,-3 3,-3 h${w - 6} q3,0 3,3 V${H} Z" fill="var(${fill})" pointer-events="none"/>`
+        : `<rect x="${x}" y="${H - 1}" width="${w}" height="1" fill="var(--line)"/>`;
+      return `<rect x="${i * bw}" y="0" width="${bw}" height="${H}" fill="transparent" data-tip="${tip}"/>${mark}`;
     }).join("");
   } catch {
     // Leave the last values in place; the next refresh retries.
@@ -277,12 +287,20 @@ for (const el of ["#by", "#from", "#to"]) $(el).addEventListener("change", loadH
 $("details").addEventListener("toggle", (e) => { if (e.target.open) loadHistory(); });
 
 // Widget sessions can't open Devices, so only browsers get the link.
-fetch("/api/me").then((r) => r.ok && r.json()).then((me) => { $("#devices").hidden = me?.kind !== "browser"; }).catch(() => {});
+async function showDevicesLink() {
+  try {
+    const res = await fetch("/api/me");
+    const me = res.ok ? await res.json() : null;
+    $("#devices").hidden = me?.kind !== "browser";
+  } catch {
+    // Offline; the link stays hidden until the next load.
+  }
+}
 
 connect();
-loadWeek();
 setInterval(renderLive, 30000);
 setInterval(loadWeek, 60000);
+await Promise.all([loadWeek(), showDevicesLink()]);
 </script>
 </body>
 </html>

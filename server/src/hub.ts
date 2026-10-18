@@ -100,7 +100,7 @@ ON CONFLICT(id) DO UPDATE SET
   last_seen  = MAX(sessions.last_seen, excluded.last_seen)`;
 
 export class Hub extends DurableObject<Env> {
-  private sql: SqlStorage;
+  private readonly sql: SqlStorage;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -225,7 +225,7 @@ export class Hub extends DurableObject<Env> {
   async applyEvent(e: HookEvent): Promise<void> {
     if (!Object.hasOwn(STATUS_FOR_EVENT, e.event)) return;
     const status = STATUS_FOR_EVENT[e.event];
-    const project = e.cwd?.split("/").filter(Boolean).pop() ?? null;
+    const project = e.cwd?.split("/").findLast(Boolean) ?? null;
     const endedAt = status === "ended" ? e.ts : null;
     // last_seen is arrival time, since the stale sweep compares it with the server clock.
     this.sql.exec(UPSERT_EVENT, e.session_id, e.machine, project, e.cwd, e.branch, status, e.ts, Date.now(), e.ts, endedAt);
@@ -341,16 +341,17 @@ export class Hub extends DurableObject<Env> {
     const day = by === "day";
     const sessionKey = day ? `date(started_at / 1000, 'unixepoch')` : `COALESCE(project, '(unknown)')`;
     const usageKey = day ? `date(u.day / 1000, 'unixepoch')` : `COALESCE(s.project, '(unknown)')`;
-    const cols = USAGE_COLUMNS;
+    const sums = USAGE_COLUMNS.map((c) => `SUM(${c}) AS ${c}`).join(", ");
+    const zeros = USAGE_COLUMNS.map((c) => `0 AS ${c}`).join(", ");
+    const usage = USAGE_COLUMNS.map((c) => `u.${c}`).join(", ");
     return this.sql
       .exec<HistoryRow>(
-        `SELECT key, SUM(n) AS sessions, SUM(d) AS duration_ms, ${cols.map((c) => `SUM(${c}) AS ${c}`).join(", ")}
+        `SELECT key, SUM(n) AS sessions, SUM(d) AS duration_ms, ${sums}
          FROM (
-           SELECT ${sessionKey} AS key, 1 AS n, MAX(COALESCE(ended_at, last_event) - started_at, 0) AS d,
-                  ${cols.map((c) => `0 AS ${c}`).join(", ")}
+           SELECT ${sessionKey} AS key, 1 AS n, MAX(COALESCE(ended_at, last_event) - started_at, 0) AS d, ${zeros}
            FROM sessions WHERE started_at >= ? AND started_at < ?
            UNION ALL
-           SELECT ${usageKey}, 0, 0, ${cols.map((c) => `u.${c}`).join(", ")}
+           SELECT ${usageKey}, 0, 0, ${usage}
            FROM usage_daily u LEFT JOIN sessions s ON s.id = u.session_id
            WHERE u.day >= ? AND u.day < ?
          )

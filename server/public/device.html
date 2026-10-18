@@ -42,7 +42,7 @@
   <button id="go">Continue</button>
   <p id="msg" role="alert"></p>
 </form>
-<script>
+<script type="module">
   const $ = (s) => document.querySelector(s);
   const code = $("#code");
   let request = null;
@@ -72,7 +72,7 @@
   code.oninput = () => { request = null; $("#who").hidden = true; $("#go").textContent = "Continue"; };
 
   code.value = new URLSearchParams(location.search).get("code") ?? "";
-  if (code.value) check();
+  if (code.value) await check();
 </script>
 </body>
 </html>

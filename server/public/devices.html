@@ -65,9 +65,9 @@
 
   <p id="err" role="alert"></p>
 </main>
-<script>
+<script type="module">
   const $ = (s) => document.querySelector(s);
-  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => `&#${c.codePointAt(0)};`);
   const ago = (t) => {
     const m = Math.round((Date.now() - t) / 60000);
     if (m < 1) return "just now";
@@ -118,11 +118,14 @@
     if (!res.ok) return fail(`Could not create token (${res.status})`);
     const { token, url } = await res.json();
     // The token stays out of the setup command so it never lands in chat or settings.json.
+    const exportLine = cmd(`export CESSION_TOKEN='${token}'`);
+    const fileLine = cmd(`mkdir -p ~/.config/cession && (umask 077 && echo '${token}' > ~/.config/cession/token)`);
+    const setupLine = cmd(`/cession:setup ${url}`);
     $("#token").innerHTML = `<div class="once">
       <div>New token for <b>${esc($("#mname").value.trim())}</b> — shown once</div>
-      <div class="sub">add to ~/.zshrc</div>${cmd(`export CESSION_TOKEN='${token}'`)}
-      <div class="sub">or, where Claude Code doesn't read ~/.zshrc (code-server, apps opened from the Dock), run in a terminal</div>${cmd(`mkdir -p ~/.config/cession && (umask 077 && echo '${token}' > ~/.config/cession/token)`)}
-      <div class="sub">then run in Claude Code</div>${cmd(`/cession:setup ${url}`)}</div>`;
+      <div class="sub">add to ~/.zshrc</div>${exportLine}
+      <div class="sub">or, where Claude Code doesn't read ~/.zshrc (code-server, apps opened from the Dock), run in a terminal</div>${fileLine}
+      <div class="sub">then run in Claude Code</div>${setupLine}</div>`;
     $("#mname").value = "";
     load();
   };
@@ -162,7 +165,7 @@
     }
   };
 
-  load();
+  await load();
 </script>
 </body>
 </html>
