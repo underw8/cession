@@ -95,7 +95,7 @@ TypeScript `strict`, 2-space indent, double quotes, semicolons. snake_case for D
 ## Configuration
 
 - `SETUP_CODE` (`npx wrangler secret put SETUP_CODE`, at least 32 characters, e.g. `openssl rand -hex 16`) registers the first passkey and recovers a lost one. `.dev.vars.example` leaves it blank on purpose.
-- Per machine: the token comes from `CESSION_TOKEN`, or else from `~/.config/cession/token` (`$XDG_CONFIG_HOME` aware), which `/cession:setup` fills through a device login (`plugin/skills/setup/login.sh`). The token never passes through the chat, argv or stdout; `/cession:setup` writes `CESSION_URL` and the OTel vars to `~/.claude/settings.json`; `CESSION_MACHINE` overrides `hostname -s`.
+- Per machine: the token comes from `CESSION_TOKEN`, or else from `~/.config/cession/token` (`$XDG_CONFIG_HOME` aware), which `/cession:setup` fills through a device login. The skill only runs `plugin/skills/setup/setup.sh` (checks, `login.sh`, settings merge; exit 3 asks before replacing OTel settings). The token never passes through the chat, argv or stdout; `/cession:setup` writes `CESSION_URL` and the OTel vars to `~/.claude/settings.json`; `CESSION_MACHINE` overrides `hostname -s`.
 
 ## Pitfalls
 

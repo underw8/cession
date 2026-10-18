@@ -4,6 +4,8 @@
 # the shell profile (code-server, apps launched from the Dock).
 token=${CESSION_TOKEN:-$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/cession/token" 2>/dev/null)}
 [ -n "${CESSION_URL:-}" ] && [ -n "$token" ] || exit 0
+# Machine tokens are cs_ + base64url. Anything else could smuggle options into curl's -K config.
+case "$token" in *[!A-Za-z0-9_-]*) exit 0 ;; esac
 # The token never crosses plain http; localhost is for dev. No userinfo, or curl's host isn't the one checked here.
 case "$CESSION_URL" in *@*) exit 0 ;; esac
 case "$CESSION_URL" in

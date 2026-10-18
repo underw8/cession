@@ -65,6 +65,24 @@ expect idle
 rm -rf "$cfg"
 echo "ok: device login saves a private token that report.sh uses"
 
+# setup.sh on a throwaway HOME: fresh merge, idempotent rerun, refusal to overwrite foreign OTel settings.
+home=$(mktemp -d)
+mkdir -p "$home/.claude" && echo '{"model":"keep-me"}' > "$home/.claude/settings.json"
+HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" > "$home/out" 2>&1 || { echo "FAIL: setup.sh: $(cat "$home/out")"; exit 1; }
+jq -e --arg u "$CESSION_URL" '.model == "keep-me" and .env.CESSION_URL == $u and .env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT == ($u + "/v1/metrics") and (.otelHeadersHelper | startswith("sh -c"))' "$home/.claude/settings.json" >/dev/null ||
+  { echo "FAIL: setup.sh wrote unexpected settings"; exit 1; }
+grep -q "$CESSION_TOKEN" "$home/.claude/settings.json" "$home/out" && { echo "FAIL: setup.sh leaked the token"; exit 1; }
+HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" >/dev/null 2>&1 || { echo "FAIL: setup.sh rerun"; exit 1; }
+jq '.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "https://other.example/v1/metrics"' "$home/.claude/settings.json" > "$home/s" && mv "$home/s" "$home/.claude/settings.json"
+rc=0; HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" > "$home/out" 2>&1 || rc=$?
+[ "$rc" = 3 ] && grep -q "other.example" "$home/out" || { echo "FAIL: setup.sh should stop with 3, got $rc"; exit 1; }
+HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" --yes >/dev/null 2>&1 || { echo "FAIL: setup.sh --yes"; exit 1; }
+jq -e --arg u "$CESSION_URL" '.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT == ($u + "/v1/metrics")' "$home/.claude/settings.json" >/dev/null || { echo "FAIL: --yes did not replace"; exit 1; }
+rc=0; HOME="$home" sh "$here/skills/setup/setup.sh" "http://evil.example" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 1 ] || { echo "FAIL: setup.sh accepted plain http"; exit 1; }
+rm -rf "$home"
+echo "ok: setup.sh merges settings, keeps the token out, asks before replacing OTel settings"
+
 # Runs report.sh with CESSION_URL=$2 and stdin $3; it must exit 0 at once and print nothing.
 noop() {
   start=$(date +%s)
@@ -76,5 +94,9 @@ noop "black-holed server returns at once, silently" https://10.255.255.1
 noop "plain-http remote is a silent no-op" http://example.com
 for u in http://localhost:@evil.com http://127.0.0.1:80@evil.com; do noop "userinfo $u is a silent no-op" "$u"; done
 noop "unconfigured is a silent no-op" "" "{}"
+pwn=$(mktemp -u)
+CESSION_TOKEN="x\"
+output = \"$pwn" noop "a token that would inject curl config is refused" "$CESSION_URL"
+[ ! -e "$pwn" ] || { echo "FAIL: curl config injection wrote $pwn"; exit 1; }
 noop "garbage stdin is a silent no-op" "$CESSION_URL" "not json"
 echo PASS

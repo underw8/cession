@@ -37,6 +37,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   out=$(printf '{"device_code":"%s"}' "$device" | curl -s --max-time 10 -X POST "$url/auth/device/token" -H 'Content-Type: application/json' -d @-) || continue
   token=$(printf '%s' "$out" | jq -r '.token // empty' 2>/dev/null) || token=""
   if [ -n "$token" ]; then
+    # Machine tokens are cs_ + base64url; anything else could smuggle options into curl's -K config later.
+    case "$token" in *[!A-Za-z0-9_-]*) echo "cession: the server returned a malformed token; nothing saved" >&2; exit 1 ;; esac
     (umask 077 && mkdir -p "$dir" && printf '%s\n' "$token" > "$dir/token.tmp" && mv "$dir/token.tmp" "$dir/token")
     echo "Approved. Token saved to $dir/token"
     exit 0
