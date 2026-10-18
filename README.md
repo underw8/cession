@@ -53,17 +53,22 @@ The hook needs `jq` and `curl`. To override the machine name, set `CESSION_MACHI
 
 ## Updating
 
-Sync your copy from upstream on GitHub; Workers Builds redeploys automatically.
+- **Server:** pull the latest code and run `make deploy` (or `npx wrangler deploy` in `server/`). If you deployed with the button, sync your copy from upstream on GitHub and Workers Builds redeploys it.
+- **Plugin:** run `/plugin marketplace update cession` in Claude Code, then restart it.
+- **Widget:** download the newest `.dmg` from Releases, or `git pull` and `make widget`.
 
 ## macOS widget
+
+Download the `.dmg` from the latest [widget release](https://github.com/underw8/cession/releases?q=widget) (Apple silicon), open it and drag **cession-widget** to Applications. The build isn't signed, so the first time, right-click the app in Applications and choose **Open**, then confirm. Or build it yourself:
 
 ```bash
 cd widget
 cargo run
 ```
 
-- The widget has no Dock icon. Show, reload (after a deploy) or quit it from the menu bar icon.
-- Hover the widget to show its bar: drag ⠿ to move it, ⇥ sends it to the next display, ✕ hides it. Drag the bottom-right grip to resize.
+- The widget has no Dock icon. Use the menu bar icon to show it, pair it with a server, reload it after a deploy (**Reload status**) or quit it.
+- Hover the widget to show its bar: drag ⠿ to move it, ↕ switches between the full panel and a thin bar, ⇥ sends it to the next display, ✕ hides it. Drag the bottom-right grip to resize.
+- In bar mode it shows one line per session with its run time and cost, and today's total; the bar pulses amber while a session is waiting for you.
 - ⌘-drag anywhere also moves it.
 - Resize it from any edge or corner, or ⌥-drag anywhere to resize from the nearest corner.
 - Its size and position are remembered between launches.

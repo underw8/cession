@@ -31,6 +31,11 @@ jobs:
     needs: enabled
     if: needs.enabled.outputs.sonar == 'true'
     runs-on: ubuntu-latest
+    # The server analyses one report per project at a time; overlapping scans can fail
+    # its background task. GitHub keeps one waiting run per group and cancels older waiters.
+    concurrency:
+      group: sonar-${{ github.repository }}
+      cancel-in-progress: false
     timeout-minutes: 15
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
