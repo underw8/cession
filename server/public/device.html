@@ -78,7 +78,7 @@
     if (!request) return check();
     let res;
     try { res = await approve(); } catch (err) { $("#msg").textContent = err.message; return; }
-    if (res.status === 401) { $("#msg").textContent = "Passkey was not accepted"; return; }
+    if (res.status === 401) { $("#msg").textContent = (await res.text()) === "reauthenticate" ? "Passkey was not accepted" : "Session expired; sign in again"; return; }
     if (res.status !== 204) { request = null; return check(); }
     $("#go").hidden = true;
     code.disabled = true;

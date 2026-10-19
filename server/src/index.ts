@@ -2,7 +2,7 @@ import { allowedPairOrigin, clearCookie, clientKey, clientKeys, ingestAuthorized
 import { DEVICE_TTL_MS, sha256hex, type DeviceKind, type Session } from "./authstore";
 import { parseEvent } from "./event";
 import { parseOtlp } from "./otlp";
-import { passkeyRoute, stepUpRefusal } from "./passkey";
+import { freshPasskey, passkeyRoute } from "./passkey";
 
 import type { Hub } from "./hub";
 
@@ -159,16 +159,21 @@ async function history({ url, hub }: SessionCtx): Promise<Response> {
   return Response.json(await hub.history(from, to, by));
 }
 
-type BodyCtx = SessionCtx & { body: Record<string, unknown> };
+// passkeyId is the passkey that signed the step-up, so removing it revokes what was created.
+type BodyCtx = SessionCtx & { body: Record<string, unknown>; passkeyId: string | null };
 
 // Minting a credential or removing a passkey needs a fresh assertion in the body, so a stolen
-// cookie alone can't do either. The localhost dev session has no passkey to assert with.
-const stepUp = ({ hub, url, session }: SessionCtx, body: Record<string, unknown>) =>
-  session.id === "dev" ? null : stepUpRefusal(hub, body, url);
+// cookie alone can't do either. Resolves to the signing passkey (null for the localhost dev
+// session, which has no passkey to assert with), or the refusal.
+async function stepUp({ hub, url, session }: SessionCtx, body: Record<string, unknown>): Promise<string | null | Response> {
+  if (session.id === "dev") return null;
+  return (await freshPasskey(hub, body, url)) ?? status(401, "reauthenticate");
+}
 
 const fresh = (handler: Handler<BodyCtx>): Handler<SessionCtx> => async (c) => {
   const body = await readJson(c.req);
-  return (await stepUp(c, body)) ?? handler({ ...c, body });
+  const signed = await stepUp(c, body);
+  return signed instanceof Response ? signed : handler({ ...c, body, passkeyId: signed });
 };
 
 async function revokeDevice(c: SessionCtx): Promise<Response> {
@@ -176,8 +181,8 @@ async function revokeDevice(c: SessionCtx): Promise<Response> {
   const device = DEVICE_PATH.exec(url.pathname);
   if (!device) return env.ASSETS.fetch(req);
   const [, kind, id] = device;
-  const refusal = kind === "passkey" ? await stepUp(c, await readJson(req)) : null;
-  if (refusal) return refusal;
+  const signed = kind === "passkey" ? await stepUp(c, await readJson(req)) : null;
+  if (signed instanceof Response) return signed;
   if (!(await hub.revoke(kind as DeviceKind, id))) return status(404, "not found");
   const self = kind === session.kind && id === session.id;
   return new Response(null, { status: 204, headers: self ? { "Set-Cookie": clearCookie() } : {} });
@@ -189,10 +194,10 @@ const SESSION_ROUTES: Record<string, Handler<SessionCtx>> = {
   "GET /api/sessions": async ({ hub }) => Response.json(await hub.snapshot()),
   "GET /api/history": history,
   "GET /api/devices": async ({ hub, session }) => Response.json(await hub.devices(session.id)),
-  "POST /api/machines": fresh(async ({ body, url, hub, session }) => {
+  "POST /api/machines": fresh(async ({ body, url, hub, passkeyId }) => {
     const name = machineName(body);
     if (!name) return status(400, "name must be 1-64 characters");
-    const created = await hub.createMachineToken(name, session.passkey_id);
+    const created = await hub.createMachineToken(name, passkeyId);
     return created ? Response.json({ ...created, url: url.origin }) : status(401, "unauthorized");
   }),
   "GET /api/device": async ({ url, hub }) => {
@@ -200,12 +205,12 @@ const SESSION_ROUTES: Record<string, Handler<SessionCtx>> = {
     const request = code.length <= 64 ? await hub.lookupDeviceCode(code) : null;
     return request ? Response.json(request) : notFound();
   },
-  "POST /api/device/approve": fresh(async ({ body, hub, session }) => {
+  "POST /api/device/approve": fresh(async ({ body, hub, passkeyId }) => {
     const code = field(body, "code", 64);
-    return code && (await hub.approveDeviceCode(code, session.passkey_id)) ? status(204) : notFound();
+    return code && (await hub.approveDeviceCode(code, passkeyId)) ? status(204) : notFound();
   }),
-  "POST /api/pairing": fresh(async ({ hub, session }) => {
-    const created = await hub.createPairingCode(session.passkey_id);
+  "POST /api/pairing": fresh(async ({ hub, passkeyId }) => {
+    const created = await hub.createPairingCode(passkeyId);
     return created ? Response.json({ code: dashed(created.code), expires_at: created.expires_at }) : status(401, "unauthorized");
   }),
 };

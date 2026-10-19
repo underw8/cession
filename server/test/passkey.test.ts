@@ -117,6 +117,25 @@ describe("passkeys", () => {
     expect(await hub().getPasskey(id)).toBeNull();
   });
 
+  it("ties credentials to the passkey that signed the step-up, not the session's", async () => {
+    const { auth: a, cookie } = await owner();
+    const b = await SoftAuthenticator.create();
+    const added = await register(b, { assertion: await assertion(a) }, cookie);
+    expect((await call("/auth/register/verify", added, cookie)).status).toBe(204);
+    const bId = added.response.id;
+
+    const { token } = (await (await call("/api/machines", { name: "m", assertion: await assertion(b) }, cookie)).json()) as { token: string };
+    const { code } = (await (await call("/api/pairing", { assertion: await assertion(b) }, cookie)).json()) as { code: string };
+    const { device_code, user_code } = await hub().createDeviceCode(uid("mac"), "192.0.2.91");
+    expect((await call("/api/device/approve", { code: user_code, assertion: await assertion(b) }, cookie)).status).toBe(204);
+
+    expect(await hub().revoke("passkey", bId)).toBe(true);
+    expect(await hub().checkMachineToken(token)).toBe(false);
+    expect((await hub().redeemPairingCode(code, "w", "192.0.2.92")).status).toBe("bad");
+    expect(await hub().pollDeviceCode(device_code)).toBe("expired");
+    expect(await hub().getSession(cookie)).not.toBeNull();
+  });
+
   it("creates nothing descending from a passkey once it is removed", async () => {
     const { id } = await owner();
     const { user_code } = await hub().createDeviceCode(uid("mac"), "192.0.2.90");

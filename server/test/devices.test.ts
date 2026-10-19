@@ -53,6 +53,12 @@ describe("devices", () => {
     expect((await call(path, { ...json({ name: "m", assertion: await assertion(auth) }), cookie })).status).toBe(200);
   });
 
+  it("asks a legacy browser session with no passkey for an assertion too", async () => {
+    const res = await call("/api/machines", { ...json({ name: "m" }), cookie: await newSession("browser", "legacy") });
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe("reauthenticate");
+  });
+
   it("does not take an assertion twice", async () => {
     const { auth, cookie } = await owner();
     const body = json({ name: "m", assertion: await assertion(auth) });
