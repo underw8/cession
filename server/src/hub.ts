@@ -125,7 +125,7 @@ export class Hub extends DurableObject<Env> {
     }
   }
 
-  async createMachineToken(name: string, passkeyId: string | null = null): Promise<{ id: string; token: string }> {
+  async createMachineToken(name: string, passkeyId: string | null = null): Promise<{ id: string; token: string } | null> {
     return authstore.createMachineToken(this.sql, name, passkeyId);
   }
 
@@ -133,7 +133,7 @@ export class Hub extends DurableObject<Env> {
     return authstore.checkMachineToken(this.sql, token);
   }
 
-  async createSession(kind: SessionKind, label: string, passkeyId: string | null = null): Promise<string> {
+  async createSession(kind: SessionKind, label: string, passkeyId: string | null = null): Promise<string | null> {
     return authstore.createSession(this.sql, kind, label, passkeyId);
   }
 
@@ -141,7 +141,7 @@ export class Hub extends DurableObject<Env> {
     return authstore.getSession(this.sql, raw);
   }
 
-  async createPairingCode(passkeyId: string | null = null): Promise<{ code: string; expires_at: number }> {
+  async createPairingCode(passkeyId: string | null = null): Promise<{ code: string; expires_at: number } | null> {
     return authstore.createPairingCode(this.sql, passkeyId);
   }
 

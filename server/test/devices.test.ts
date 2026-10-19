@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BASE, cookieOf, fetchWith, hub, resetFailures, uid } from "./helpers";
+import { SoftAuthenticator } from "./authenticator";
+import { BASE, assertion, cookieOf, fetchWith, get, newPairingCode, newSession, owner, resetFailures, uid } from "./helpers";
 
 function call(path: string, init: RequestInit & { cookie?: string } = {}) {
   const headers = new Headers(init.headers);
@@ -22,8 +23,8 @@ afterEach(resetFailures); // the global-ceiling tests must not leave other files
 
 describe("devices", () => {
   it("creates a machine token that ingests until revoked", async () => {
-    const browser = await hub().createSession("browser", "b");
-    const res = await call("/api/machines", { ...json({ name: "  work-mbp  " }), cookie: browser });
+    const { auth, cookie: browser } = await owner();
+    const res = await call("/api/machines", { ...json({ name: "  work-mbp  ", assertion: await assertion(auth) }), cookie: browser });
     expect(res.status).toBe(200);
     const { id, token, url } = (await res.json()) as { id: string; token: string; url: string };
     expect(url).toBe(BASE);
@@ -38,12 +39,34 @@ describe("devices", () => {
   });
 
   it.each(["", "   ", "x".repeat(65)])("rejects machine name %j with 400", async (name) => {
-    const browser = await hub().createSession("browser", "b");
-    expect((await call("/api/machines", { ...json({ name }), cookie: browser })).status).toBe(400);
+    const { auth, cookie } = await owner();
+    expect((await call("/api/machines", { ...json({ name, assertion: await assertion(auth) }), cookie })).status).toBe(400);
+  });
+
+  it.each(["/api/machines", "/api/pairing"])("%s needs a fresh assertion from a registered passkey", async (path) => {
+    const { auth, cookie } = await owner();
+    const bare = await call(path, { ...json({ name: "m" }), cookie });
+    expect(bare.status).toBe(401);
+    expect(await bare.text()).toBe("reauthenticate");
+    const stranger = await assertion(await SoftAuthenticator.create());
+    expect((await call(path, { ...json({ name: "m", assertion: stranger }), cookie })).status).toBe(401);
+    expect((await call(path, { ...json({ name: "m", assertion: await assertion(auth) }), cookie })).status).toBe(200);
+  });
+
+  it("does not take an assertion twice", async () => {
+    const { auth, cookie } = await owner();
+    const body = json({ name: "m", assertion: await assertion(auth) });
+    expect((await call("/api/machines", { ...body, cookie })).status).toBe(200);
+    expect((await call("/api/machines", { ...body, cookie })).status).toBe(401);
+  });
+
+  it("skips the assertion for the localhost dev session", async () => {
+    expect((await get("/api/machines", json({ name: "dev" }))).status).toBe(200);
+    expect((await get("/api/pairing", json({}))).status).toBe(200);
   });
 
   it("revoking the current browser session clears its cookie", async () => {
-    const browser = await hub().createSession("browser", "b");
+    const browser = await newSession("browser", "b");
     const { browsers } = (await (await call("/api/devices", { cookie: browser })).json()) as { browsers: { id: string; current: boolean }[] };
     const me = browsers.find((b) => b.current)!;
     const res = await call(`/api/devices/browser/${me.id}`, { method: "DELETE", cookie: browser });
@@ -55,8 +78,8 @@ describe("devices", () => {
 
 describe("pairing", () => {
   it("pairs a widget end to end, single use", async () => {
-    const browser = await hub().createSession("browser", "b");
-    const res = await call("/api/pairing", { method: "POST", cookie: browser });
+    const { auth, cookie: browser } = await owner();
+    const res = await call("/api/pairing", { ...json({ assertion: await assertion(auth) }), cookie: browser });
     const { code, expires_at } = (await res.json()) as { code: string; expires_at: number };
     expect(code).toMatch(/^[2-9A-Z]{4}-[2-9A-Z]{4}$/);
     expect(expires_at).toBeGreaterThan(Date.now());
@@ -73,7 +96,7 @@ describe("pairing", () => {
   });
 
   it("locks pairing after 10 bad attempts, even for a valid code", async () => {
-    const { code } = await hub().createPairingCode();
+    const { code } = await newPairingCode();
     for (let i = 0; i < 10; i++) await pair("WRONG-CODE");
     expect((await pair(code)).status).toBe(429);
   });
@@ -84,28 +107,28 @@ describe("pairing", () => {
   });
 
   it("locks pairing per IP: 10 failures from one IP don't lock another", async () => {
-    const { code } = await hub().createPairingCode();
+    const { code } = await newPairingCode();
     for (let i = 0; i < 10; i++) await pair("WRONG-CODE", "192.0.2.30");
     expect((await pair(code, "192.0.2.30")).status).toBe(429);
     expect((await pair(code, "192.0.2.31")).status).toBe(303);
   });
 
   it("has no global pairing ceiling: 100 failures across IPs don't lock a fresh IP", async () => {
-    const { code } = await hub().createPairingCode();
+    const { code } = await newPairingCode();
     for (let i = 0; i < 100; i++) await pair("WRONG-CODE", `198.51.100.${i}`);
     expect((await pair(code, "203.0.113.1")).status).toBe(303);
   });
 
   it("locks pairing per IPv6 /48 after 100 failures across its /64s", async () => {
-    const { code } = await hub().createPairingCode();
+    const { code } = await newPairingCode();
     for (let i = 0; i < 100; i++) await pair("WRONG-CODE", `2001:db8:5:${i.toString(16)}::1`);
     expect((await pair(code, "2001:db8:5:ffff::1")).status).toBe(429);
     expect((await pair(code, "2001:db8:6::1")).status).toBe(303);
   });
 
   it("revoking a widget closes its socket and its cookie stops working", async () => {
-    const browser = await hub().createSession("browser", "b");
-    const widget = await hub().createSession("widget", "Widget");
+    const browser = await newSession("browser", "b");
+    const widget = await newSession("widget", "Widget");
     const res = await call("/live", { headers: { Upgrade: "websocket" }, cookie: widget });
     expect(res.status).toBe(101);
     const ws = res.webSocket!;

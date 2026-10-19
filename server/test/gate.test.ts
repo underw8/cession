@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import worker from "../src/index";
-import { BASE, asIncoming, authEnv as devEnv, fetchWith as fetchUnauthenticated, hub, machineToken, resetFailures } from "./helpers";
+import { BASE, asIncoming, authEnv as devEnv, fetchWith as fetchUnauthenticated, hub, machineToken, resetFailures, newSession } from "./helpers";
 
 // Verifies the router enforces the session gate on every read route and never on ingest.
 
@@ -51,7 +51,7 @@ describe("session gate (DEV_SKIP_AUTH unset)", () => {
 
 describe("widget session scope", () => {
   it("reads the dashboard API but not browser-only routes", async () => {
-    const raw = await hub().createSession("widget", "w");
+    const raw = await newSession("widget", "w");
     expect((await fetchAs(raw, "/api/sessions")).status).toBe(200);
     expect(await (await fetchAs(raw, "/api/me")).json()).toEqual({ kind: "widget" });
     expect((await fetchAs(raw, "/api/devices")).status).toBe(403);
@@ -62,7 +62,7 @@ describe("widget session scope", () => {
   });
 
   it("reports a browser session as browser", async () => {
-    const raw = await hub().createSession("browser", "b");
+    const raw = await newSession("browser", "b");
     expect(await (await fetchAs(raw, "/api/me")).json()).toEqual({ kind: "browser" });
   });
 });
@@ -84,7 +84,7 @@ describe("CSRF origin check", () => {
     });
 
   it("rejects a cross-origin POST to a normal route", async () => {
-    const raw = await hub().createSession("browser", "b");
+    const raw = await newSession("browser", "b");
     const evil = { method: "POST", headers: { Origin: "https://evil.test" } };
     expect((await fetchAs(raw, "/api/machines", evil)).status).toBe(403);
   });
@@ -114,7 +114,7 @@ describe("security headers", () => {
   };
 
   it("sets them on a gated page, /login, a redirect and an API 401", async () => {
-    const raw = await hub().createSession("browser", "b");
+    const raw = await newSession("browser", "b");
     const page = await fetchAs(raw, "/");
     expect(page.status).toBe(200);
     expectHeaders(page);

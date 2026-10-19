@@ -59,10 +59,26 @@
     $("#go").textContent = "Approve";
   }
 
+  // ponytail: native JSON helpers need Safari 18.4+ or Chrome 129+, as on /login.
+  // Approving needs a fresh sign-in. Ask only when the server refuses, since the localhost dev
+  // session is exempt and has no passkey to sign in with.
+  async function approve() {
+    const send = (extra) =>
+      fetch("/api/device/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.value.trim(), ...extra }) });
+    const res = await send({});
+    if (res.status !== 401 || (await res.clone().text()) !== "reauthenticate") return res;
+    const login = await fetch("/auth/login/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!login.ok) throw new Error(login.status === 429 ? "Too many sign-in attempts, try again later" : `Not allowed (${login.status})`);
+    const credential = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(await login.json()) });
+    return send({ assertion: credential.toJSON() });
+  }
+
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
     if (!request) return check();
-    const res = await fetch("/api/device/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.value.trim() }) });
+    let res;
+    try { res = await approve(); } catch (err) { $("#msg").textContent = err.message; return; }
+    if (res.status === 401) { $("#msg").textContent = "Passkey was not accepted"; return; }
     if (res.status !== 204) { request = null; return check(); }
     $("#go").hidden = true;
     code.disabled = true;

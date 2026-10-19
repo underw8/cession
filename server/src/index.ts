@@ -2,7 +2,7 @@ import { allowedPairOrigin, clearCookie, clientKey, clientKeys, ingestAuthorized
 import { DEVICE_TTL_MS, sha256hex, type DeviceKind, type Session } from "./authstore";
 import { parseEvent } from "./event";
 import { parseOtlp } from "./otlp";
-import { passkeyRoute } from "./passkey";
+import { passkeyRoute, stepUpRefusal } from "./passkey";
 
 import type { Hub } from "./hub";
 
@@ -159,10 +159,25 @@ async function history({ url, hub }: SessionCtx): Promise<Response> {
   return Response.json(await hub.history(from, to, by));
 }
 
-async function revokeDevice({ req, env, url, hub, session }: SessionCtx): Promise<Response> {
+type BodyCtx = SessionCtx & { body: Record<string, unknown> };
+
+// Minting a credential or removing a passkey needs a fresh assertion in the body, so a stolen
+// cookie alone can't do either. The localhost dev session has no passkey to assert with.
+const stepUp = ({ hub, url, session }: SessionCtx, body: Record<string, unknown>) =>
+  session.id === "dev" ? null : stepUpRefusal(hub, body, url);
+
+const fresh = (handler: Handler<BodyCtx>): Handler<SessionCtx> => async (c) => {
+  const body = await readJson(c.req);
+  return (await stepUp(c, body)) ?? handler({ ...c, body });
+};
+
+async function revokeDevice(c: SessionCtx): Promise<Response> {
+  const { req, env, url, hub, session } = c;
   const device = DEVICE_PATH.exec(url.pathname);
   if (!device) return env.ASSETS.fetch(req);
   const [, kind, id] = device;
+  const refusal = kind === "passkey" ? await stepUp(c, await readJson(req)) : null;
+  if (refusal) return refusal;
   if (!(await hub.revoke(kind as DeviceKind, id))) return status(404, "not found");
   const self = kind === session.kind && id === session.id;
   return new Response(null, { status: 204, headers: self ? { "Set-Cookie": clearCookie() } : {} });
@@ -174,24 +189,25 @@ const SESSION_ROUTES: Record<string, Handler<SessionCtx>> = {
   "GET /api/sessions": async ({ hub }) => Response.json(await hub.snapshot()),
   "GET /api/history": history,
   "GET /api/devices": async ({ hub, session }) => Response.json(await hub.devices(session.id)),
-  "POST /api/machines": async ({ req, url, hub, session }) => {
-    const name = machineName(await readJson(req));
+  "POST /api/machines": fresh(async ({ body, url, hub, session }) => {
+    const name = machineName(body);
     if (!name) return status(400, "name must be 1-64 characters");
-    return Response.json({ ...(await hub.createMachineToken(name, session.passkey_id)), url: url.origin });
-  },
+    const created = await hub.createMachineToken(name, session.passkey_id);
+    return created ? Response.json({ ...created, url: url.origin }) : status(401, "unauthorized");
+  }),
   "GET /api/device": async ({ url, hub }) => {
     const code = url.searchParams.get("code") ?? "";
     const request = code.length <= 64 ? await hub.lookupDeviceCode(code) : null;
     return request ? Response.json(request) : notFound();
   },
-  "POST /api/device/approve": async ({ req, hub, session }) => {
-    const code = field(await readJson(req), "code", 64);
+  "POST /api/device/approve": fresh(async ({ body, hub, session }) => {
+    const code = field(body, "code", 64);
     return code && (await hub.approveDeviceCode(code, session.passkey_id)) ? status(204) : notFound();
-  },
-  "POST /api/pairing": async ({ hub, session }) => {
-    const { code, expires_at } = await hub.createPairingCode(session.passkey_id);
-    return Response.json({ code: dashed(code), expires_at });
-  },
+  }),
+  "POST /api/pairing": fresh(async ({ hub, session }) => {
+    const created = await hub.createPairingCode(session.passkey_id);
+    return created ? Response.json({ code: dashed(created.code), expires_at: created.expires_at }) : status(401, "unauthorized");
+  }),
 };
 
 async function route(req: Request, env: Env): Promise<Response> {

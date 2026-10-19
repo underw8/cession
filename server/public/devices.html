@@ -80,6 +80,21 @@
     fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
   const fail = (msg) => { $("#err").textContent = msg; };
 
+  // ponytail: native JSON helpers need Safari 18.4+ or Chrome 129+, as on /login.
+  async function signIn() {
+    const login = await post("/auth/login/options");
+    if (!login.ok) throw new Error(login.status === 429 ? "Too many sign-in attempts, try again later" : `Not allowed (${login.status})`);
+    const credential = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(await login.json()) });
+    return credential.toJSON();
+  }
+  // Minting a credential or removing a passkey needs a fresh sign-in. Ask only when the server
+  // refuses, since the localhost dev session is exempt and has no passkey to sign in with.
+  async function fresh(send) {
+    const res = await send({});
+    if (res.status !== 401 || (await res.clone().text()) !== "reauthenticate") return res;
+    return send({ assertion: await signIn() });
+  }
+
   const row = (name, sub, action = "") =>
     `<div class="row"><div><div class="name">${name}</div><div class="sub">${sub}</div></div>${action}</div>`;
   const revoke = (kind, id, label = "Revoke") =>
@@ -104,7 +119,11 @@
     if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); copy.textContent = "Copied"; return; }
     const b = e.target.closest("button.rev");
     if (!b || !confirm(`${b.textContent} this ${b.dataset.kind}?`)) return;
-    const res = await fetch(`/api/devices/${b.dataset.kind}/${b.dataset.id}`, { method: "DELETE" });
+    fail("");
+    const del = (body) =>
+      fetch(`/api/devices/${b.dataset.kind}/${b.dataset.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let res;
+    try { res = b.dataset.kind === "passkey" ? await fresh(del) : await del({}); } catch (err) { return fail(err.message); }
     if (!res.ok) return fail(`Could not revoke (${res.status})`);
     if (b.textContent === "Sign out") { location.replace("/login"); return; }
     load();
@@ -114,7 +133,9 @@
 
   $("#newtok").onsubmit = async (e) => {
     e.preventDefault();
-    const res = await post("/api/machines", { name: $("#mname").value });
+    fail("");
+    let res;
+    try { res = await fresh((extra) => post("/api/machines", { name: $("#mname").value, ...extra })); } catch (err) { return fail(err.message); }
     if (!res.ok) return fail(`Could not create token (${res.status})`);
     const { token, url } = await res.json();
     // The token stays out of the setup command so it never lands in chat or settings.json.
@@ -132,7 +153,9 @@
 
   let timer;
   $("#pair").onclick = async () => {
-    const res = await post("/api/pairing");
+    fail("");
+    let res;
+    try { res = await fresh((extra) => post("/api/pairing", extra)); } catch (err) { return fail(err.message); }
     if (!res.ok) return fail(`Could not create a pairing code (${res.status})`);
     const { code, expires_at } = await res.json();
     clearInterval(timer);
@@ -151,10 +174,7 @@
   $("#addkey").onclick = async () => {
     fail("");
     try {
-      const login = await post("/auth/login/options");
-      if (!login.ok) throw new Error(`Not allowed (${login.status})`);
-      const assertion = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(await login.json()) });
-      const opts = await post("/auth/register/options", { assertion: assertion.toJSON() });
+      const opts = await post("/auth/register/options", { assertion: await signIn() });
       if (!opts.ok) throw new Error(`Not allowed (${opts.status})`);
       const credential = await navigator.credentials.create({ publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(await opts.json()) });
       const res = await post("/auth/register/verify", { response: credential.toJSON(), name: `${navigator.platform || "Passkey"} ${new Date().toISOString().slice(0, 10)}` });

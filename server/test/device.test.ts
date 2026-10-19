@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cookieOf, fetchWith, hub, resetFailures, sql, uid } from "./helpers";
+import { assertion, cookieOf, fetchWith, hub, newSession, owner, resetFailures, sql, uid } from "./helpers";
 
 const json = (body: unknown, headers: Record<string, string> = {}) =>
   ({ method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -23,25 +23,28 @@ describe("device login", () => {
 
     expect(await (await poll(s.device_code)).json()).toEqual({ error: "authorization_pending" });
 
-    const browser = await hub().createSession("browser", "b", "pk-device");
+    const { auth, id, cookie: browser } = await owner();
     expect(await (await as(browser, `/api/device?code=${s.user_code}`)).json()).toMatchObject({ name, ip: "192.0.2.70" });
-    expect((await as(browser, "/api/device/approve", json({ code: s.user_code }))).status).toBe(204);
+    const bare = await as(browser, "/api/device/approve", json({ code: s.user_code }));
+    expect(bare.status).toBe(401);
+    expect(await bare.text()).toBe("reauthenticate");
+    expect((await as(browser, "/api/device/approve", json({ code: s.user_code, assertion: await assertion(auth) }))).status).toBe(204);
 
     const res = await poll(s.device_code);
     expect(res.status).toBe(200);
     const { token } = (await res.json()) as { token: string };
     expect(await hub().checkMachineToken(token)).toBe(true);
     // The token descends from the approving session's passkey, so removing it revokes the machine.
-    expect(await sql("SELECT 1 FROM machine_tokens WHERE name = ? AND passkey_id = 'pk-device'", name)).toHaveLength(1);
+    expect(await sql("SELECT 1 FROM machine_tokens WHERE name = ? AND passkey_id = ?", name, id)).toHaveLength(1);
 
     expect(await (await poll(s.device_code)).json()).toEqual({ error: "expired_token" });
-    expect((await as(browser, "/api/device/approve", json({ code: s.user_code }))).status).toBe(404);
+    expect((await as(browser, "/api/device/approve", json({ code: s.user_code, assertion: await assertion(auth) }))).status).toBe(404);
   });
 
   it("needs a browser session to look up or approve a code", async () => {
     const s = (await (await start()).json()) as Started;
     expect((await fetchWith(`/api/device?code=${s.user_code}`)).status).toBe(401);
-    const widget = await hub().createSession("widget", "w");
+    const widget = await newSession("widget", "w");
     expect((await as(widget, "/api/device/approve", json({ code: s.user_code }))).status).toBe(403);
     expect(await (await poll(s.device_code)).json()).toEqual({ error: "authorization_pending" });
   });
@@ -49,8 +52,8 @@ describe("device login", () => {
   it("expires codes after their lifetime", async () => {
     const s = (await (await start()).json()) as Started;
     await sql("UPDATE device_codes SET expires_at = 0");
-    const browser = await hub().createSession("browser", "b");
-    expect((await as(browser, "/api/device/approve", json({ code: s.user_code }))).status).toBe(404);
+    const { auth, cookie: browser } = await owner();
+    expect((await as(browser, "/api/device/approve", json({ code: s.user_code, assertion: await assertion(auth) }))).status).toBe(404);
     expect(await (await poll(s.device_code)).json()).toEqual({ error: "expired_token" });
   });
 

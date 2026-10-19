@@ -47,10 +47,10 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 | `POST /auth/register/*`, `/auth/login/*`, `/auth/logout` | `SETUP_CODE`, or a browser session plus a fresh assertion | passkey ceremony, issues the session cookie |
 | `POST /auth/pair` | one-time pairing code | widget gets a session cookie |
 | `POST /auth/device`, `/auth/device/token` | none; budgeted per client | device login (RFC 8628): a machine starts it, then polls until a browser approves |
-| `/device`, `/api/device`, `/api/device/approve` | browser session only | look up and approve a device login code |
+| `/device`, `/api/device`, `/api/device/approve` | browser session only; approve also needs a fresh passkey assertion | look up and approve a device login code |
 | `/live` | session cookie | WebSocket (hibernation); full snapshot on every change |
 | `/api/sessions`, `/api/history`, `/api/me` | session cookie | reads, reachable by widget and browser |
-| `/api/devices`, `/api/machines`, `/api/pairing`, `/api/devices/:kind/:id` | browser session only | manage tokens, widgets, browsers, passkeys |
+| `/api/devices`, `/api/machines`, `/api/pairing`, `/api/devices/:kind/:id` | browser session only; `POST /api/machines`, `POST /api/pairing` and `DELETE /api/devices/passkey/:id` also need a fresh passkey assertion in the body (`assertion`, from `/auth/login/options`), except the localhost dev session | manage tokens, widgets, browsers, passkeys |
 | anything else | session cookie | static dashboard |
 
 - One Durable Object, fixed name `"hub"`. Status per hook event is `STATUS_FOR_EVENT` in `hub.ts`; the alarm marks silent sessions `stale` and prunes old rows.

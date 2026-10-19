@@ -50,7 +50,7 @@ describe("readSession shape check", () => {
 
 describe("machine tokens", () => {
   it("accepts a token from createMachineToken, rejects it after revoke", async () => {
-    const { id, token } = await hub().createMachineToken("t");
+    const { id, token } = (await hub().createMachineToken("t"))!;
     const sessionId = uid();
     const validEvent = { session_id: sessionId, event: "SessionStart", ts: Date.now() };
 
