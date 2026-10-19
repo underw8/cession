@@ -10,6 +10,7 @@ use objc2_app_kit::{
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::PageLoadEvent;
 use tauri::{ActivationPolicy, LogicalSize, Manager, Size, Url, WebviewUrl, WebviewWindow};
 use tauri_nspanel::{
     tauri_panel, ManagerExt, CollectionBehavior, PanelBuilder, PanelLevel, StyleMask, TrackingAreaOptions,
@@ -65,9 +66,10 @@ fn main() {
         .setup(|app| {
             // Accessory apps may join other apps' fullscreen spaces.
             app.set_activation_policy(ActivationPolicy::Accessory);
-            // Shared with the tray "Pair with server…" handler, the only place allowed to clear a pin.
-            let paired: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            // Shared with the tray "Pair with server…" handler, the only place allowed to start a reset.
+            let paired: Arc<Mutex<Pin>> = Arc::new(Mutex::new(Pin::Unpaired));
             let nav_paired = paired.clone();
+            let load_paired = paired.clone();
             let panel = PanelBuilder::<_, Widget>::new(app.handle(), "widget")
                 .url(WebviewUrl::App("index.html".into()))
                 .size(Size::Logical(LogicalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)))
@@ -82,12 +84,19 @@ fn main() {
                 .corner_radius(CORNER_RADIUS)
                 .transparent(true)
                 .with_window(move |w| {
-                    w.decorations(false).user_agent(USER_AGENT).initialization_script(CHROME).on_navigation(move |url| {
-                        let mut paired = nav_paired.lock().unwrap();
-                        let (ok, next) = allow(paired.as_deref(), url);
-                        *paired = next;
-                        ok
-                    })
+                    w.decorations(false)
+                        .user_agent(USER_AGENT)
+                        .initialization_script(CHROME)
+                        .on_navigation(move |url| {
+                            let mut paired = nav_paired.lock().unwrap();
+                            let (ok, next) = allow(&paired, url);
+                            *paired = next;
+                            ok
+                        })
+                        .on_page_load(move |_window, payload| {
+                            let mut paired = load_paired.lock().unwrap();
+                            *paired = on_load(&paired, payload.event(), payload.url());
+                        })
                 })
                 .add_style_mask(StyleMask::empty().nonactivating_panel())
                 .build()?;
@@ -113,8 +122,9 @@ fn main() {
                     }
                     "pair" => {
                         if let Some(window) = app.get_webview_window("widget") {
-                            // The only place allowed to clear the pin, before the local page can load again.
-                            *paired.lock().unwrap() = None;
+                            // Only tauri://localhost is allowed until that page actually commits (see `on_load`),
+                            // so a still-loading attacker page can't use this window to pin itself.
+                            *paired.lock().unwrap() = Pin::Resetting;
                             let _ = window.navigate("tauri://localhost/index.html#pair".parse().unwrap());
                         }
                     }
@@ -136,23 +146,45 @@ fn main() {
         .expect("error while running cession-widget");
 }
 
-/// The local page may hand off to one remote origin, pinned until the tray "Pair with server…" handler
-/// clears it; returns (allowed, new origin). A `tauri://localhost` navigation while pinned is denied
-/// rather than treated as a reset, since only that handler is allowed to unpin.
-fn allow(paired: Option<&str>, url: &Url) -> (bool, Option<String>) {
-    let keep = paired.map(String::from);
-    if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
-        return (paired.is_none(), keep);
+/// Lifecycle of the widget's one legitimate remote origin.
+#[derive(Debug, Clone, PartialEq)]
+enum Pin {
+    /// No origin pinned yet; the first allowed https (or http on localhost/127.0.0.1) navigation pins one.
+    Unpaired,
+    /// Only this origin may be navigated to; `tauri://localhost` is denied.
+    Paired(String),
+    /// Set by the tray "Pair with server…" handler before it navigates home. Only `tauri://localhost`
+    /// is allowed, and the state stays `Resetting` until that page actually commits (see `on_load`) —
+    /// a page still loading when the tray fires can't use this window to pin itself.
+    Resetting,
+}
+
+/// Decides whether a navigation may proceed and the pin state after it.
+fn allow(state: &Pin, url: &Url) -> (bool, Pin) {
+    let tauri_local = url.scheme() == "tauri" && url.host_str() == Some("localhost");
+    let pinned = match state {
+        Pin::Resetting => return (tauri_local, Pin::Resetting),
+        Pin::Unpaired => None,
+        Pin::Paired(origin) => Some(origin),
+    };
+    if tauri_local {
+        return (pinned.is_none(), state.clone());
     }
     let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1"));
     if !(url.scheme() == "https" || (url.scheme() == "http" && local)) {
-        return (false, keep);
+        return (false, state.clone());
     }
     let origin = url.origin().ascii_serialization();
-    match paired {
-        None => (true, Some(origin)),
-        Some(p) => (p == origin, keep),
+    match pinned {
+        None => (true, Pin::Paired(origin)),
+        Some(p) => (*p == origin, state.clone()),
     }
+}
+
+/// `Resetting` becomes `Unpaired` only once the local page itself has finished loading.
+fn on_load(state: &Pin, event: PageLoadEvent, url: &Url) -> Pin {
+    let committed = event == PageLoadEvent::Finished && url.scheme() == "tauri" && url.host_str() == Some("localhost");
+    if *state == Pin::Resetting && committed { Pin::Unpaired } else { state.clone() }
 }
 
 // ⌥-drag anywhere resizes from the nearest corner; ⌘-drag anywhere moves.
@@ -525,20 +557,42 @@ mod tests {
     #[test]
     fn navigation_filter() {
         let u = |s: &str| Url::parse(s).unwrap();
-        let srv = Some("https://cession.example.workers.dev".to_string());
-        assert_eq!(allow(None, &u("tauri://localhost/index.html")), (true, None));
-        assert_eq!(allow(None, &u("https://cession.example.workers.dev/auth/pair")), (true, srv.clone()));
-        assert_eq!(allow(srv.as_deref(), &u("https://cession.example.workers.dev/")), (true, srv.clone()));
-        assert_eq!(allow(srv.as_deref(), &u("https://evil.example/")), (false, srv.clone()));
-        // Pinned: tauri://localhost is denied and the pin stays, since only the tray handler may clear it.
-        assert_eq!(allow(srv.as_deref(), &u("tauri://localhost/index.html#pair")), (false, srv.clone()));
-        // Tray "Pair with server…" clears the pin before navigating, so the local page then loads normally.
-        assert_eq!(allow(None, &u("tauri://localhost/index.html#pair")), (true, None));
-        assert_eq!(allow(None, &u("http://example.com/")), (false, None));
-        assert_eq!(allow(None, &u("http://localhost:8787/")), (true, Some("http://localhost:8787".into())));
-        assert_eq!(allow(None, &u("file:///etc/passwd")), (false, None));
+        let srv = Pin::Paired("https://cession.example.workers.dev".to_string());
+        assert_eq!(allow(&Pin::Unpaired, &u("tauri://localhost/index.html")), (true, Pin::Unpaired));
+        assert_eq!(allow(&Pin::Unpaired, &u("https://cession.example.workers.dev/auth/pair")), (true, srv.clone()));
+        assert_eq!(allow(&srv, &u("https://cession.example.workers.dev/")), (true, srv.clone()));
+        assert_eq!(allow(&srv, &u("https://evil.example/")), (false, srv.clone()));
+        // Paired: tauri://localhost is denied and the pin stays, since only the tray handler may start a reset.
+        assert_eq!(allow(&srv, &u("tauri://localhost/index.html#pair")), (false, srv.clone()));
+        assert_eq!(allow(&Pin::Unpaired, &u("http://example.com/")), (false, Pin::Unpaired));
+        assert_eq!(
+            allow(&Pin::Unpaired, &u("http://localhost:8787/")),
+            (true, Pin::Paired("http://localhost:8787".into()))
+        );
+        assert_eq!(allow(&Pin::Unpaired, &u("file:///etc/passwd")), (false, Pin::Unpaired));
         for bad in ["data:text/html,hi", "blob:https://cession.example.workers.dev/x", "javascript:alert(1)"] {
-            assert_eq!(allow(srv.as_deref(), &u(bad)), (false, srv.clone()), "{bad}");
+            assert_eq!(allow(&srv, &u(bad)), (false, srv.clone()), "{bad}");
         }
+
+        // Resetting: only tauri://localhost is allowed, and the state doesn't change until the page commits.
+        assert_eq!(allow(&Pin::Resetting, &u("https://evil.example/")), (false, Pin::Resetting));
+        assert_eq!(allow(&Pin::Resetting, &u("tauri://localhost/index.html#pair")), (true, Pin::Resetting));
+        assert_eq!(
+            on_load(&Pin::Resetting, PageLoadEvent::Started, &u("tauri://localhost/index.html#pair")),
+            Pin::Resetting
+        );
+        assert_eq!(
+            on_load(&Pin::Resetting, PageLoadEvent::Finished, &u("https://evil.example/")),
+            Pin::Resetting
+        );
+        assert_eq!(
+            on_load(&Pin::Resetting, PageLoadEvent::Finished, &u("tauri://localhost/index.html#pair")),
+            Pin::Unpaired
+        );
+        // A load finish outside a reset never changes the pin.
+        assert_eq!(
+            on_load(&srv, PageLoadEvent::Finished, &u("tauri://localhost/index.html")),
+            srv
+        );
     }
 }
