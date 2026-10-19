@@ -171,7 +171,6 @@ describe("POST /v1/metrics", () => {
     expect(res.status).toBe(200);
     const s = await liveSession(id);
     expect(s?.cost_usd).toBe(0);
-    expect(Number.isFinite(s?.cost_usd)).toBe(true);
   });
 
   it("hub.applyUsage skips an update whose computed total would exceed 1e12", async () => {

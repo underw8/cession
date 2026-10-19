@@ -3,16 +3,11 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import type { Snapshot } from "../src/hub";
 import { assertion, authEnv, fetchWith, get, hub, owner, post, uid } from "./helpers";
 
-async function connectAuthed(cookie: string) {
-  const res = await fetchWith("/live", { headers: { Upgrade: "websocket", Cookie: `__Host-cession=${cookie}` } }, authEnv);
-  expect(res.status).toBe(101);
-  const ws = res.webSocket!;
-  ws.accept();
-  return ws;
-}
-
-async function connect() {
-  const res = await get("/live", { headers: { Upgrade: "websocket" } });
+/** Opens /live; with a cookie it authenticates like a browser session, otherwise like the dev bypass. */
+async function connect(cookie?: string) {
+  const res = cookie
+    ? await fetchWith("/live", { headers: { Upgrade: "websocket", Cookie: `__Host-cession=${cookie}` } }, authEnv)
+    : await get("/live", { headers: { Upgrade: "websocket" } });
   expect(res.status).toBe(101);
   const ws = res.webSocket!;
   ws.accept();
@@ -90,7 +85,7 @@ describe("GET /live", () => {
 
   it("closes a browser session's socket with 4001 when its passkey is removed", async () => {
     const { auth, id, cookie } = await owner();
-    const ws = await connectAuthed(cookie);
+    const { ws } = await connect(cookie);
     const code = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code), { once: true }));
     const body = JSON.stringify({ assertion: await assertion(auth) });
     const res = await fetchWith(`/api/devices/passkey/${id}`, { method: "DELETE", headers: { Cookie: `__Host-cession=${cookie}` }, body }, authEnv);
@@ -100,7 +95,7 @@ describe("GET /live", () => {
 
   it("closes a browser session's socket with 4001 after it logs out", async () => {
     const { cookie } = await owner();
-    const ws = await connectAuthed(cookie);
+    const { ws } = await connect(cookie);
     const code = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code), { once: true }));
     const res = await fetchWith("/auth/logout", { method: "POST", headers: { Cookie: `__Host-cession=${cookie}` } }, authEnv);
     expect(res.status).toBe(204);

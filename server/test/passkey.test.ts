@@ -1,20 +1,6 @@
-import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SoftAuthenticator } from "./authenticator";
-import { BASE, SETUP, assertion, cookieOf, fetchWith, hub, newSession, owner, resetFailures, setupEnv as authEnv, sql, uid } from "./helpers";
-
-function call(path: string, body?: unknown, cookie?: string, e: Env = authEnv, ip?: string) {
-  const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": "vitest" };
-  if (cookie) headers.Cookie = `__Host-cession=${cookie}`;
-  if (ip) headers["CF-Connecting-IP"] = ip;
-  return fetchWith(path, body === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(body) }, e);
-}
-
-async function register(auth: SoftAuthenticator, body: object = { setup_code: SETUP }, cookie?: string) {
-  const opts = await call("/auth/register/options", body, cookie);
-  expect(opts.status).toBe(200);
-  return { response: await auth.register((await opts.json()) as PublicKeyCredentialCreationOptionsJSON, BASE) };
-}
+import { SETUP, assertion, call, cookieOf, fetchWith, hub, newSession, owner, register, resetFailures, setupEnv as authEnv, sql, uid } from "./helpers";
 
 const login = async (auth: SoftAuthenticator, ip?: string) =>
   call("/auth/login/verify", { response: await assertion(auth, ip) }, undefined, authEnv, ip);

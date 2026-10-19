@@ -169,10 +169,13 @@ describe("auth rate limit", () => {
 describe("gate rate limit", () => {
   const stub = (success: boolean) => ({ ...devEnv, GATE_LIMITER: { limit: async () => ({ success }) } }) as unknown as Env;
 
-  it("answers 429 for a non-auth route on a deployed host once the shared budget is spent", async () => {
-    const res = await worker.fetch(asIncoming(new Request("https://cession.example.com/login")), stub(false));
-    expect(res.status).toBe(429);
-  });
+  it.each(["/login", "/auth/device/token"])(
+    "answers 429 for GET %s on a deployed host once the shared budget is spent",
+    async (path) => {
+      const res = await worker.fetch(asIncoming(new Request(`https://cession.example.com${path}`)), stub(false));
+      expect(res.status).toBe(429);
+    },
+  );
 
   it("does not spend the shared budget on a POST /auth/* request or on localhost", async () => {
     const overBudget = stub(false);
@@ -184,11 +187,6 @@ describe("gate rate limit", () => {
     expect(authRes.status).not.toBe(429);
     const localRes = await worker.fetch(asIncoming(new Request(`${BASE}/login`)), overBudget);
     expect(localRes.status).not.toBe(429);
-  });
-
-  it("spends the shared budget on a non-POST /auth/* request, since it never reaches AUTH_LIMITER", async () => {
-    const res = await worker.fetch(asIncoming(new Request("https://cession.example.com/auth/device/token")), stub(false));
-    expect(res.status).toBe(429);
   });
 
   it("the real binding enforces its configured 1200/min limit", async () => {
