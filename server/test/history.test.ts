@@ -1,6 +1,6 @@
-import { runDurableObjectAlarm } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { HistoryRow } from "../src/hub";
+import type { Hub, HistoryRow } from "../src/hub";
 import { get, hub, post, row, sql, uid } from "./helpers";
 
 const DAY = 86_400_000;
@@ -13,8 +13,11 @@ const cost = (id: string, value: number, temporality = 2) => ({
     sum: { aggregationTemporality: temporality, dataPoints: [{ asDouble: value, attributes: [{ key: "session.id", value: { stringValue: id } }] }] } }] }] }],
 });
 
-const ev = (session_id: string, event: string, ts: number, extra: object = {}) =>
-  post("/events", { session_id, event, ts, ...extra });
+// Feeds fixtures straight to the Hub: this file seeds history far outside the 24h ingest window,
+// which parseEvent (tested in events.test.ts) would otherwise reject.
+const ev = (session_id: string, event: string, ts: number, extra: Partial<{ machine: string; cwd: string; branch: string }> = {}) =>
+  runInDurableObject(hub(), (inst: Hub) =>
+    inst.applyEvent({ session_id, event, ts, machine: extra.machine ?? null, cwd: extra.cwd ?? null, branch: extra.branch ?? null }));
 
 describe("stale sweep", () => {
   it("marks sessions silent for 30+ minutes stale, keeps fresh ones, and revives on a new event", async () => {
@@ -69,7 +72,7 @@ describe("stale sweep", () => {
 });
 
 describe("GET /api/history", () => {
-  // Far from other tests' timestamps, but after the 2020 ts floor.
+  // Far from other tests' timestamps; fed through applyEvent directly, so the ingest age limit doesn't apply.
   const T = Date.UTC(2021, 0, 1);
 
   // Each test seeds its own base time so exact counts never see another test's rows.

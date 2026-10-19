@@ -20,8 +20,13 @@ type Point = { attributes?: Attr[]; asDouble?: number; asInt?: string | number }
 type Metric = { name?: string; sum?: { aggregationTemporality?: number; dataPoints?: Point[] } };
 
 const MAX_ID = 256;
+// A monotonic counter export should never reach this; it only bounds the damage from a malformed one.
+export const MAX_USAGE = 1e12;
 const list = <T>(v: unknown): T[] => (Array.isArray(v) ? v : []);
-const attr = (attrs: Attr[] | undefined, key: string) => list<Attr>(attrs).find((a) => a.key === key)?.value?.stringValue;
+const attr = (attrs: Attr[] | undefined, key: string): string | undefined => {
+  const v = list<Attr>(attrs).find((a) => a.key === key)?.value?.stringValue;
+  return typeof v === "string" ? v : undefined;
+};
 
 const COST_METRIC = "claude_code.cost.usage";
 const TOKEN_METRIC = "claude_code.token.usage";
@@ -38,7 +43,7 @@ function pointUpdate(m: Metric, p: Point, resourceSession: string | undefined): 
   const column = columnFor(m, p);
   const value = Number(p.asDouble ?? p.asInt ?? 0);
   // Counters never go down, so a negative value is junk.
-  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0) return null;
+  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0 || value > MAX_USAGE) return null;
   return { sessionId, column, value, mode: m.sum?.aggregationTemporality === 2 ? "set" : "add" };
 }
 
@@ -59,5 +64,6 @@ export function parseOtlp(body: unknown): UsageUpdate[] {
     if (seen) seen.value += u.value;
     else totals.set(key, u);
   }
-  return [...totals.values()];
+  // A sum of many in-bounds points can still overflow the bound.
+  return [...totals.values()].filter((u) => Number.isFinite(u.value) && u.value <= MAX_USAGE);
 }

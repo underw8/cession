@@ -1,6 +1,8 @@
+import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import type { Hub } from "../src/hub";
 import { parseOtlp } from "../src/otlp";
-import { liveSession, post, row, uid } from "./helpers";
+import { hub, liveSession, post, row, uid } from "./helpers";
 
 type Attrs = Record<string, string>;
 const attrs = (a: Attrs) => Object.entries(a).map(([key, v]) => ({ key, value: { stringValue: v } }));
@@ -77,6 +79,29 @@ describe("parseOtlp", () => {
     }));
     expect(updates).toEqual([{ sessionId: "y".repeat(256), column: "cost_usd", value: 2, mode: "add" }]);
   });
+
+  it("treats a non-string stringValue as absent, dropping the point", () => {
+    const body = {
+      resourceMetrics: [{
+        resource: { attributes: [] },
+        scopeMetrics: [{ metrics: [{
+          name: "claude_code.cost.usage",
+          sum: { aggregationTemporality: 1, dataPoints: [
+            { asDouble: 1, attributes: [{ key: "session.id", value: { stringValue: ["x".repeat(300)] } }] },
+          ] },
+        }] }],
+      }],
+    };
+    expect(parseOtlp(body)).toEqual([]);
+  });
+
+  it("drops a session/column total over 1e12 even when summed from in-bounds points", () => {
+    const updates = parseOtlp(payload({
+      temporality: 1,
+      cost: [{ value: 1e12, attrs: { "session.id": "a" } }, { value: 1e12, attrs: { "session.id": "a" } }],
+    }));
+    expect(updates).toEqual([]);
+  });
 });
 
 describe("POST /v1/metrics", () => {
@@ -134,5 +159,25 @@ describe("POST /v1/metrics", () => {
 
   it("returns 400 on invalid JSON", async () => {
     expect((await post("/v1/metrics", "{")).status).toBe(400);
+  });
+
+  it("drops absurd data points (1e308) and keeps the session total finite", async () => {
+    const id = uid();
+    await post("/events", { session_id: id, event: "SessionStart", ts: Date.now() });
+    const res = await post("/v1/metrics", payload({
+      temporality: 1,
+      cost: [{ value: 1e308, attrs: { "session.id": id } }, { value: 1e308, attrs: { "session.id": id } }],
+    }));
+    expect(res.status).toBe(200);
+    const s = await liveSession(id);
+    expect(s?.cost_usd).toBe(0);
+    expect(Number.isFinite(s?.cost_usd)).toBe(true);
+  });
+
+  it("hub.applyUsage skips an update whose computed total would exceed 1e12", async () => {
+    const id = uid();
+    await runInDurableObject(hub(), (inst: Hub) =>
+      inst.applyUsage([{ sessionId: id, column: "cost_usd", value: 2e12, mode: "add" }]));
+    expect((await row(id))?.cost_usd).toBe(0);
   });
 });
