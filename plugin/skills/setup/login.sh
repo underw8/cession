@@ -49,10 +49,12 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     # Machine tokens are cs_ + base64url; anything else could smuggle options into curl's -K config later.
     case "$token" in *[!A-Za-z0-9_-]*) echo "cession: the server returned a malformed token; nothing saved" >&2; exit 1 ;; esac
     # The origin binds the token: report.sh and the OTel helper send it nowhere else.
+    # setup.sh passes the origin it already computed via $CESSION_ORIGIN; a standalone run computes it here.
+    origin=${CESSION_ORIGIN:-}
+    [ -n "$origin" ] || { rest=${url#*://}; origin="${url%%://*}://${rest%%/*}"; }
     # Origin emptied first: until the new one lands, an empty origin file makes everything send nothing.
-    rest=${url#*://}
     (umask 077 && mkdir -p "$dir" && : > "$dir/origin" && printf '%s\n' "$token" > "$dir/token.tmp" && mv "$dir/token.tmp" "$dir/token" &&
-      printf '%s\n' "${url%%://*}://${rest%%/*}" > "$dir/origin.tmp" && mv "$dir/origin.tmp" "$dir/origin")
+      printf '%s\n' "$origin" > "$dir/origin.tmp" && mv "$dir/origin.tmp" "$dir/origin")
     echo "Approved. Token saved to $dir/token"
     exit 0
   fi
