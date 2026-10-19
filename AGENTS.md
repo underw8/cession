@@ -79,6 +79,7 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 - `src/chrome.js` only draws the hover chrome; `hit()` in `main.rs` does the hit-testing, so their sizes must agree.
 - `tauri_panel!` already imports `NSEvent`, `NSWindow`, `NSPoint`/`NSRect`/`NSSize`, `MainThreadMarker`, `msg_send` and `AnyObject`; importing them again fails with E0252.
 - `widget/icons/icon.png` must exist, or `tauri::generate_context!` fails to compile.
+- Only the tray "Pair with server…" handler moves `Pin` to `Resetting`. A `Paired` widget denies navigation to `tauri://localhost`. `Resetting` becomes `Unpaired` only once the local page finishes loading.
 
 ## Testing
 
@@ -97,6 +98,7 @@ TypeScript `strict`, 2-space indent, double quotes, semicolons. snake_case for D
 
 - `SETUP_CODE` (`npx wrangler secret put SETUP_CODE`, at least 32 characters, e.g. `openssl rand -hex 16`) registers the first passkey and recovers a lost one. `.dev.vars.example` leaves it blank on purpose.
 - Per machine: the token comes from `CESSION_TOKEN`, or else from `~/.config/cession/token` (`$XDG_CONFIG_HOME` aware), which `/cession:setup` fills through a device login. The skill only runs `plugin/skills/setup/setup.sh` (checks, `login.sh`, settings merge; exit 3 asks before replacing OTel settings). The token never passes through the chat, argv or stdout; `/cession:setup` writes `CESSION_URL` and the OTel vars to `~/.claude/settings.json`; `CESSION_MACHINE` overrides `hostname -s`.
+- A file token is bound to the server origin `login.sh` saves in `~/.config/cession/origin`. `report.sh` sends a file token only to that origin, except on a legacy install with no origin file, which still sends. The `otelHeadersHelper` setup.sh installs fails closed: it sends a file token only when every configured OTLP endpoint is under the saved origin. A token from `CESSION_TOKEN` carries no origin binding.
 
 ## Pitfalls
 
