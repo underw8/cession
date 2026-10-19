@@ -1,9 +1,7 @@
 import type { Session } from "./authstore";
 import type { Hub } from "./hub";
 
-// Matches randomToken("cs_") / randomToken("") in authstore.ts: a "cs_" prefix (or none) plus
-// unpadded base64url of 32 random bytes. A value of the wrong shape can't be a real token or
-// session, so it's rejected here without spending a Hub call on it.
+// Matches randomToken() in authstore.ts: unpadded base64url of 32 bytes, "cs_"-prefixed or not; the wrong shape saves a Hub call.
 const TOKEN_RE = /^cs_[A-Za-z0-9_-]{43}$/;
 const SESSION_RE = /^[A-Za-z0-9_-]{43}$/;
 
@@ -42,10 +40,8 @@ export function sameOrigin(req: Request): boolean {
 
 // /auth/pair accepts no Origin at all, the Worker's own origin, or the widget's fixed scheme;
 // anything else - including a sandboxed iframe's "null" - is a forged pairing post.
-export function allowedPairOrigin(req: Request): boolean {
-  const origin = req.headers.get("Origin");
-  return !origin || origin === new URL(req.url).origin || origin === "tauri://localhost";
-}
+export const allowedPairOrigin = (req: Request): boolean =>
+  sameOrigin(req) || req.headers.get("Origin") === "tauri://localhost";
 
 /** The caller's /64 and, for IPv6, its /48, since one tenant can own a whole /48. */
 export const clientKeys = (req: Request) => [...new Set([clientKey(req), clientKey(req, 48)])];

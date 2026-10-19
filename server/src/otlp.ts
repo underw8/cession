@@ -43,7 +43,7 @@ function pointUpdate(m: Metric, p: Point, resourceSession: string | undefined): 
   const column = columnFor(m, p);
   const value = Number(p.asDouble ?? p.asInt ?? 0);
   // Counters never go down, so a negative value is junk.
-  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0 || value > MAX_USAGE) return null;
+  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0) return null;
   return { sessionId, column, value, mode: m.sum?.aggregationTemporality === 2 ? "set" : "add" };
 }
 
@@ -64,6 +64,5 @@ export function parseOtlp(body: unknown): UsageUpdate[] {
     if (seen) seen.value += u.value;
     else totals.set(key, u);
   }
-  // A sum of many in-bounds points can still overflow the bound.
-  return [...totals.values()].filter((u) => Number.isFinite(u.value) && u.value <= MAX_USAGE);
+  return [...totals.values()].filter((u) => u.value <= MAX_USAGE);
 }

@@ -162,9 +162,7 @@ async function history({ url, hub }: SessionCtx): Promise<Response> {
 // passkeyId is the passkey that signed the step-up, so removing it revokes what was created.
 type BodyCtx = SessionCtx & { body: Record<string, unknown>; passkeyId: string | null };
 
-// Minting a credential or removing a passkey needs a fresh assertion in the body, so a stolen
-// cookie alone can't do either. Resolves to the signing passkey (null for the localhost dev
-// session, which has no passkey to assert with), or the refusal.
+// A fresh assertion in the body is required so a stolen cookie alone can't mint or remove a passkey; resolves to the signing passkey (null for the dev session) or the refusal.
 async function stepUp({ hub, url, session }: SessionCtx, body: Record<string, unknown>): Promise<string | null | Response> {
   if (session.id === "dev") return null;
   return (await freshPasskey(hub, body, url)) ?? status(401, "reauthenticate");
