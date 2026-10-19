@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
 use tauri_nspanel::objc2_foundation::NSString;
@@ -10,6 +11,7 @@ use objc2_app_kit::{
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::PageLoadEvent;
 use tauri::{ActivationPolicy, LogicalSize, Manager, Size, Url, WebviewUrl, WebviewWindow};
 use tauri_nspanel::{
     tauri_panel, ManagerExt, CollectionBehavior, PanelBuilder, PanelLevel, StyleMask, TrackingAreaOptions,
@@ -65,6 +67,10 @@ fn main() {
         .setup(|app| {
             // Accessory apps may join other apps' fullscreen spaces.
             app.set_activation_policy(ActivationPolicy::Accessory);
+            // Shared with the tray "Pair with server…" handler, the only place allowed to start a reset.
+            let paired: Arc<Mutex<Pin>> = Arc::new(Mutex::new(Pin::Unpaired));
+            let nav_paired = paired.clone();
+            let load_paired = paired.clone();
             let panel = PanelBuilder::<_, Widget>::new(app.handle(), "widget")
                 .url(WebviewUrl::App("index.html".into()))
                 .size(Size::Logical(LogicalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)))
@@ -78,14 +84,20 @@ fn main() {
                 .hides_on_deactivate(false)
                 .corner_radius(CORNER_RADIUS)
                 .transparent(true)
-                .with_window(|w| {
-                    let paired = Mutex::new(None);
-                    w.decorations(false).user_agent(USER_AGENT).initialization_script(CHROME).on_navigation(move |url| {
-                        let mut paired = paired.lock().unwrap();
-                        let (ok, next) = allow(paired.as_deref(), url);
-                        *paired = next;
-                        ok
-                    })
+                .with_window(move |w| {
+                    w.decorations(false)
+                        .user_agent(USER_AGENT)
+                        .initialization_script(CHROME)
+                        .on_navigation(move |url| {
+                            let mut paired = nav_paired.lock().unwrap();
+                            let (ok, next) = allow(&paired, url);
+                            *paired = next;
+                            ok
+                        })
+                        .on_page_load(move |_window, payload| {
+                            let mut paired = load_paired.lock().unwrap();
+                            *paired = on_load(&paired, payload.event(), payload.url());
+                        })
                 })
                 .add_style_mask(StyleMask::empty().nonactivating_panel())
                 .build()?;
@@ -103,7 +115,7 @@ fn main() {
                 .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .icon_as_template(true)
                 .menu(&Menu::with_items(app, &[&show, &pair, &reload, &quit])?)
-                .on_menu_event(|app, e| match e.id().as_ref() {
+                .on_menu_event(move |app, e| match e.id().as_ref() {
                     "show" => {
                         if let Ok(panel) = app.get_webview_panel("widget") {
                             panel.show();
@@ -111,7 +123,16 @@ fn main() {
                     }
                     "pair" => {
                         if let Some(window) = app.get_webview_window("widget") {
-                            let _ = window.navigate("tauri://localhost/index.html#pair".parse().unwrap());
+                            let previous = {
+                                let mut pin = paired.lock().unwrap();
+                                let previous = pin.clone();
+                                *pin = Pin::Resetting;
+                                previous
+                            };
+                            let n = RESET_COUNTER.fetch_add(1, Ordering::Relaxed);
+                            if window.navigate(reset_url(n)).is_err() {
+                                *paired.lock().unwrap() = previous;
+                            }
                         }
                     }
                     "reload" => {
@@ -132,21 +153,51 @@ fn main() {
         .expect("error while running cession-widget");
 }
 
-/// The local page may hand off to one remote origin, fixed until the local page loads again; returns (allowed, new origin).
-fn allow(paired: Option<&str>, url: &Url) -> (bool, Option<String>) {
-    let keep = paired.map(String::from);
-    if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
-        return (true, None);
+static RESET_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A fragment-only navigate to a page already on that fragment is a same-document WebKit
+/// navigation, so `on_page_load` Finished never fires; the query makes every reset a distinct URL.
+fn reset_url(n: u64) -> Url {
+    format!("tauri://localhost/index.html?r={n}#pair").parse().unwrap()
+}
+
+/// Lifecycle of the widget's one legitimate remote origin.
+#[derive(Debug, Clone, PartialEq)]
+enum Pin {
+    /// No origin pinned yet; the first allowed https (or http on localhost/127.0.0.1) navigation pins one.
+    Unpaired,
+    /// Only this origin may be navigated to; `tauri://localhost` is denied.
+    Paired(String),
+    /// Set by the tray "Pair with server…" handler; only `tauri://localhost` is allowed until that page commits (see `on_load`).
+    Resetting,
+}
+
+/// Decides whether a navigation may proceed and the pin state after it.
+fn allow(state: &Pin, url: &Url) -> (bool, Pin) {
+    let tauri_local = url.scheme() == "tauri" && url.host_str() == Some("localhost");
+    let pinned = match state {
+        Pin::Resetting => return (tauri_local, Pin::Resetting),
+        Pin::Unpaired => None,
+        Pin::Paired(origin) => Some(origin),
+    };
+    if tauri_local {
+        return (pinned.is_none(), state.clone());
     }
     let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1"));
     if !(url.scheme() == "https" || (url.scheme() == "http" && local)) {
-        return (false, keep);
+        return (false, state.clone());
     }
     let origin = url.origin().ascii_serialization();
-    match paired {
-        None => (true, Some(origin)),
-        Some(p) => (p == origin, keep),
+    match pinned {
+        None => (true, Pin::Paired(origin)),
+        Some(p) => (*p == origin, state.clone()),
     }
+}
+
+/// `Resetting` becomes `Unpaired` only once the local page itself has finished loading.
+fn on_load(state: &Pin, event: PageLoadEvent, url: &Url) -> Pin {
+    let committed = event == PageLoadEvent::Finished && url.scheme() == "tauri" && url.host_str() == Some("localhost");
+    if *state == Pin::Resetting && committed { Pin::Unpaired } else { state.clone() }
 }
 
 // ⌥-drag anywhere resizes from the nearest corner; ⌘-drag anywhere moves.
@@ -519,17 +570,54 @@ mod tests {
     #[test]
     fn navigation_filter() {
         let u = |s: &str| Url::parse(s).unwrap();
-        let srv = Some("https://cession.example.workers.dev".to_string());
-        assert_eq!(allow(None, &u("tauri://localhost/index.html")), (true, None));
-        assert_eq!(allow(None, &u("https://cession.example.workers.dev/auth/pair")), (true, srv.clone()));
-        assert_eq!(allow(srv.as_deref(), &u("https://cession.example.workers.dev/")), (true, srv.clone()));
-        assert_eq!(allow(srv.as_deref(), &u("https://evil.example/")), (false, srv.clone()));
-        assert_eq!(allow(srv.as_deref(), &u("tauri://localhost/index.html#pair")), (true, None));
-        assert_eq!(allow(None, &u("http://example.com/")), (false, None));
-        assert_eq!(allow(None, &u("http://localhost:8787/")), (true, Some("http://localhost:8787".into())));
-        assert_eq!(allow(None, &u("file:///etc/passwd")), (false, None));
+        let srv = Pin::Paired("https://cession.example.workers.dev".to_string());
+        assert_eq!(allow(&Pin::Unpaired, &u("tauri://localhost/index.html")), (true, Pin::Unpaired));
+        assert_eq!(allow(&Pin::Unpaired, &u("https://cession.example.workers.dev/auth/pair")), (true, srv.clone()));
+        assert_eq!(allow(&srv, &u("https://cession.example.workers.dev/")), (true, srv.clone()));
+        assert_eq!(allow(&srv, &u("https://evil.example/")), (false, srv.clone()));
+        // Paired: tauri://localhost is denied and the pin stays, since only the tray handler may start a reset.
+        assert_eq!(allow(&srv, &u("tauri://localhost/index.html#pair")), (false, srv.clone()));
+        assert_eq!(allow(&Pin::Unpaired, &u("http://example.com/")), (false, Pin::Unpaired));
+        assert_eq!(
+            allow(&Pin::Unpaired, &u("http://localhost:8787/")),
+            (true, Pin::Paired("http://localhost:8787".into()))
+        );
+        assert_eq!(allow(&Pin::Unpaired, &u("file:///etc/passwd")), (false, Pin::Unpaired));
         for bad in ["data:text/html,hi", "blob:https://cession.example.workers.dev/x", "javascript:alert(1)"] {
-            assert_eq!(allow(srv.as_deref(), &u(bad)), (false, srv.clone()), "{bad}");
+            assert_eq!(allow(&srv, &u(bad)), (false, srv.clone()), "{bad}");
+        }
+
+        // Resetting: only tauri://localhost is allowed, and the state doesn't change until the page commits.
+        assert_eq!(allow(&Pin::Resetting, &u("https://evil.example/")), (false, Pin::Resetting));
+        assert_eq!(allow(&Pin::Resetting, &u("tauri://localhost/index.html#pair")), (true, Pin::Resetting));
+        assert_eq!(
+            on_load(&Pin::Resetting, PageLoadEvent::Started, &u("tauri://localhost/index.html#pair")),
+            Pin::Resetting
+        );
+        assert_eq!(
+            on_load(&Pin::Resetting, PageLoadEvent::Finished, &u("https://evil.example/")),
+            Pin::Resetting
+        );
+        assert_eq!(
+            on_load(&Pin::Resetting, PageLoadEvent::Finished, &u("tauri://localhost/index.html#pair")),
+            Pin::Unpaired
+        );
+        // A load finish outside a reset never changes the pin.
+        assert_eq!(
+            on_load(&srv, PageLoadEvent::Finished, &u("tauri://localhost/index.html")),
+            srv
+        );
+    }
+
+    #[test]
+    fn reset_url_forces_distinct_urls() {
+        let a = reset_url(1);
+        let b = reset_url(2);
+        assert_ne!(a, b);
+        for url in [&a, &b] {
+            assert_eq!(url.scheme(), "tauri");
+            assert_eq!(url.host_str(), Some("localhost"));
+            assert_eq!(url.fragment(), Some("pair"));
         }
     }
 }

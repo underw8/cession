@@ -27,6 +27,7 @@ const wellFormed = (r: unknown): r is AuthenticationResponseJSON => {
 
 async function withSession(hub: DurableObjectStub<Hub>, req: Request, passkeyId: string): Promise<Response> {
   const raw = await hub.createSession("browser", (req.headers.get("User-Agent") ?? "browser").slice(0, 60), passkeyId);
+  if (!raw) return status(401);
   return new Response(null, { status: 204, headers: { "Set-Cookie": sessionCookie(raw) } });
 }
 
@@ -59,6 +60,11 @@ async function verifyAssertion(hub: DurableObjectStub<Hub>, response: Authentica
   }
 }
 
+/** The passkey that signed body.assertion, a fresh user-verified assertion; null when there is none. */
+export async function freshPasskey(hub: DurableObjectStub<Hub>, body: { assertion?: unknown }, url: URL): Promise<string | null> {
+  return wellFormed(body.assertion) ? verifyAssertion(hub, body.assertion, url) : null;
+}
+
 type AuthCtx = {
   req: Request;
   env: Env;
@@ -75,8 +81,7 @@ async function registrationRefusal({ env, hub, url, body, session, ips }: AuthCt
   // Only a browser may add passkeys without the setup code; a widget would escalate to browser scope.
   if (session?.kind === "browser") {
     // A stolen cookie alone must not add a passkey that outlives the owner's: verify the user again.
-    if (!wellFormed(body.assertion)) return status(401, "reauthenticate");
-    return (await verifyAssertion(hub, body.assertion, url)) ? null : status(401);
+    return (await freshPasskey(hub, body, url)) ? null : status(401, "reauthenticate");
   }
   if (!env.SETUP_CODE) return status(401);
   if (env.SETUP_CODE.length < SETUP_CODE_MIN) return status(401, `SETUP_CODE must be at least ${SETUP_CODE_MIN} characters`);

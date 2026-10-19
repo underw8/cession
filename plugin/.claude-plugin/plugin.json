@@ -1,7 +1,7 @@
 {
   "name": "cession",
   "description": "Report Claude Code sessions on this machine to your cession dashboard",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "underw8"
   }

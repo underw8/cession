@@ -1,8 +1,8 @@
-import { clearCookie, clientKey, clientKeys, ingestAuthorized, isLocalhost, isWidget, readSession, sameOrigin, sessionCookie, status } from "./auth";
+import { allowedPairOrigin, clearCookie, clientKey, clientKeys, ingestAuthorized, isLocalhost, isWidget, readSession, sameOrigin, sessionCookie, status } from "./auth";
 import { DEVICE_TTL_MS, sha256hex, type DeviceKind, type Session } from "./authstore";
 import { parseEvent } from "./event";
 import { parseOtlp } from "./otlp";
-import { passkeyRoute } from "./passkey";
+import { freshPasskey, passkeyRoute } from "./passkey";
 
 import type { Hub } from "./hub";
 
@@ -159,10 +159,29 @@ async function history({ url, hub }: SessionCtx): Promise<Response> {
   return Response.json(await hub.history(from, to, by));
 }
 
-async function revokeDevice({ req, env, url, hub, session }: SessionCtx): Promise<Response> {
+// passkeyId is the passkey that signed the step-up, so removing it revokes what was created.
+type BodyCtx = SessionCtx & { body: Record<string, unknown>; passkeyId: string | null };
+
+// A stolen cookie alone can't mint a credential or remove a passkey.
+// Resolves to the signing passkey, null for the dev session, or the refusal.
+async function stepUp({ hub, url, session }: SessionCtx, body: Record<string, unknown>): Promise<string | null | Response> {
+  if (session.id === "dev") return null;
+  return (await freshPasskey(hub, body, url)) ?? status(401, "reauthenticate");
+}
+
+const fresh = (handler: Handler<BodyCtx>): Handler<SessionCtx> => async (c) => {
+  const body = await readJson(c.req);
+  const signed = await stepUp(c, body);
+  return signed instanceof Response ? signed : handler({ ...c, body, passkeyId: signed });
+};
+
+async function revokeDevice(c: SessionCtx): Promise<Response> {
+  const { req, env, url, hub, session } = c;
   const device = DEVICE_PATH.exec(url.pathname);
   if (!device) return env.ASSETS.fetch(req);
   const [, kind, id] = device;
+  const signed = kind === "passkey" ? await stepUp(c, await readJson(req)) : null;
+  if (signed instanceof Response) return signed;
   if (!(await hub.revoke(kind as DeviceKind, id))) return status(404, "not found");
   const self = kind === session.kind && id === session.id;
   return new Response(null, { status: 204, headers: self ? { "Set-Cookie": clearCookie() } : {} });
@@ -174,24 +193,25 @@ const SESSION_ROUTES: Record<string, Handler<SessionCtx>> = {
   "GET /api/sessions": async ({ hub }) => Response.json(await hub.snapshot()),
   "GET /api/history": history,
   "GET /api/devices": async ({ hub, session }) => Response.json(await hub.devices(session.id)),
-  "POST /api/machines": async ({ req, url, hub, session }) => {
-    const name = machineName(await readJson(req));
+  "POST /api/machines": fresh(async ({ body, url, hub, passkeyId }) => {
+    const name = machineName(body);
     if (!name) return status(400, "name must be 1-64 characters");
-    return Response.json({ ...(await hub.createMachineToken(name, session.passkey_id)), url: url.origin });
-  },
+    const created = await hub.createMachineToken(name, passkeyId);
+    return created ? Response.json({ ...created, url: url.origin }) : status(401, "unauthorized");
+  }),
   "GET /api/device": async ({ url, hub }) => {
     const code = url.searchParams.get("code") ?? "";
     const request = code.length <= 64 ? await hub.lookupDeviceCode(code) : null;
     return request ? Response.json(request) : notFound();
   },
-  "POST /api/device/approve": async ({ req, hub, session }) => {
-    const code = field(await readJson(req), "code", 64);
-    return code && (await hub.approveDeviceCode(code, session.passkey_id)) ? status(204) : notFound();
-  },
-  "POST /api/pairing": async ({ hub, session }) => {
-    const { code, expires_at } = await hub.createPairingCode(session.passkey_id);
-    return Response.json({ code: dashed(code), expires_at });
-  },
+  "POST /api/device/approve": fresh(async ({ body, hub, passkeyId }) => {
+    const code = field(body, "code", 64);
+    return code && (await hub.approveDeviceCode(code, passkeyId)) ? status(204) : notFound();
+  }),
+  "POST /api/pairing": fresh(async ({ hub, passkeyId }) => {
+    const created = await hub.createPairingCode(passkeyId);
+    return created ? Response.json({ code: dashed(created.code), expires_at: created.expires_at }) : status(401, "unauthorized");
+  }),
 };
 
 async function route(req: Request, env: Env): Promise<Response> {
@@ -200,15 +220,26 @@ async function route(req: Request, env: Env): Promise<Response> {
   // Keys contain a space, so no lookup can hit an Object.prototype member.
   const key = `${req.method} ${url.pathname}`;
 
+  // Every /auth/* route is POST-only, so a POST there spends the tighter AUTH_LIMITER budget below
+  // and everything else - every other route, and any non-POST /auth/* request, ingest included -
+  // spends this shared one; both run before any Hub call. Local dev and tests have no real client
+  // address, so only deployed hosts are limited.
+  const authPost = req.method === "POST" && url.pathname.startsWith("/auth/");
+  if (!authPost && !isLocalhost(req)) {
+    const { success } = await env.GATE_LIMITER.limit({ key: clientKey(req) });
+    if (!success) return status(429, "too many requests");
+  }
+
   const ingest = INGEST[key];
   if (ingest) return ingest(c);
 
-  // CSRF check; /auth/pair is exempt because its pairing code is the credential.
+  // CSRF check; /auth/pair is exempt because its pairing code is the credential, but it still
+  // rejects any Origin other than the Worker's own or the widget's fixed "tauri:" one.
   if ((req.method === "POST" || req.method === "DELETE") && !sameOrigin(req) && url.pathname !== "/auth/pair")
     return status(403, "forbidden origin");
+  if (url.pathname === "/auth/pair" && !allowedPairOrigin(req)) return status(403, "forbidden origin");
 
-  // Local dev and tests have no real client address, so only deployed hosts are limited.
-  if (url.pathname.startsWith("/auth/") && !isLocalhost(req)) {
+  if (authPost && !isLocalhost(req)) {
     const { success } = await env.AUTH_LIMITER.limit({ key: clientKey(req) });
     if (!success) return status(429, "too many requests");
   }

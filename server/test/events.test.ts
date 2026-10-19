@@ -34,10 +34,10 @@ describe("POST /events", () => {
     expect((await row(session_id))?.cwd).toHaveLength(1024);
   });
 
-  it("rejects a ts more than 5 minutes ahead or before 2020 with 400, and keeps a ts within the skew as sent", async () => {
+  it("rejects a ts more than 5 minutes ahead or more than 24h behind with 400, and keeps a ts within range as sent", async () => {
     const id = uid();
     expect((await ev(id, "SessionStart", Date.now() + 6 * 60_000)).status).toBe(400);
-    expect((await ev(id, "SessionStart", Date.UTC(2019, 11, 31))).status).toBe(400);
+    expect((await ev(id, "SessionStart", Date.now() - (24 * 60 * 60_000 + 60_000))).status).toBe(400);
     expect(await row(id)).toBeUndefined();
     const ahead = Date.now() + 60_000;
     expect((await ev(id, "SessionStart", ahead)).status).toBe(204);

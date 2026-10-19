@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import * as authstore from "./authstore";
 import { digest, type Attempt, type ChallengePurpose, type DeviceKind, type DeviceRequest, type Devices, type FailureKey, type PasskeyRow, type Session, type SessionKind } from "./authstore";
 import type { HookEvent } from "./event";
-import { USAGE_COLUMNS, type UsageColumn, type UsageUpdate } from "./otlp";
+import { MAX_USAGE, USAGE_COLUMNS, type UsageColumn, type UsageUpdate } from "./otlp";
 
 export type Status = "working" | "needs_you" | "idle" | "stale" | "ended";
 
@@ -125,7 +125,7 @@ export class Hub extends DurableObject<Env> {
     }
   }
 
-  async createMachineToken(name: string, passkeyId: string | null = null): Promise<{ id: string; token: string }> {
+  async createMachineToken(name: string, passkeyId: string | null = null): Promise<{ id: string; token: string } | null> {
     return authstore.createMachineToken(this.sql, name, passkeyId);
   }
 
@@ -133,7 +133,7 @@ export class Hub extends DurableObject<Env> {
     return authstore.checkMachineToken(this.sql, token);
   }
 
-  async createSession(kind: SessionKind, label: string, passkeyId: string | null = null): Promise<string> {
+  async createSession(kind: SessionKind, label: string, passkeyId: string | null = null): Promise<string | null> {
     return authstore.createSession(this.sql, kind, label, passkeyId);
   }
 
@@ -141,7 +141,7 @@ export class Hub extends DurableObject<Env> {
     return authstore.getSession(this.sql, raw);
   }
 
-  async createPairingCode(passkeyId: string | null = null): Promise<{ code: string; expires_at: number }> {
+  async createPairingCode(passkeyId: string | null = null): Promise<{ code: string; expires_at: number } | null> {
     return authstore.createPairingCode(this.sql, passkeyId);
   }
 
@@ -261,7 +261,7 @@ export class Hub extends DurableObject<Env> {
       // ponytail: a session pruned after a year that exports again books its whole total today; add tombstones if that ever happens.
       const before = this.sql.exec<{ v: number }>(`SELECT ${u.column} AS v FROM sessions WHERE id = ?`, u.sessionId).one().v;
       const after = u.mode === "add" ? before + u.value : Math.max(before, u.value);
-      if (after === before) continue;
+      if (after > MAX_USAGE || after === before) continue;
       this.sql.exec(`UPDATE sessions SET ${u.column} = ? WHERE id = ?`, after, u.sessionId);
       this.sql.exec(
         `INSERT INTO usage_daily (day, session_id, ${u.column}) VALUES (?, ?, ?)

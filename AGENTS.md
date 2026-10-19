@@ -47,10 +47,10 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 | `POST /auth/register/*`, `/auth/login/*`, `/auth/logout` | `SETUP_CODE`, or a browser session plus a fresh assertion | passkey ceremony, issues the session cookie |
 | `POST /auth/pair` | one-time pairing code | widget gets a session cookie |
 | `POST /auth/device`, `/auth/device/token` | none; budgeted per client | device login (RFC 8628): a machine starts it, then polls until a browser approves |
-| `/device`, `/api/device`, `/api/device/approve` | browser session only | look up and approve a device login code |
+| `/device`, `/api/device`, `/api/device/approve` | browser session only; approve also needs a fresh passkey assertion | look up and approve a device login code |
 | `/live` | session cookie | WebSocket (hibernation); full snapshot on every change |
 | `/api/sessions`, `/api/history`, `/api/me` | session cookie | reads, reachable by widget and browser |
-| `/api/devices`, `/api/machines`, `/api/pairing`, `/api/devices/:kind/:id` | browser session only | manage tokens, widgets, browsers, passkeys |
+| `/api/devices`, `/api/machines`, `/api/pairing`, `/api/devices/:kind/:id` | browser session only; `POST /api/machines`, `POST /api/pairing` and `DELETE /api/devices/passkey/:id` also need a fresh passkey assertion in the body (`assertion`, from `/auth/login/options`), except the localhost dev session | manage tokens, widgets, browsers, passkeys |
 | anything else | session cookie | static dashboard |
 
 - One Durable Object, fixed name `"hub"`. Status per hook event is `STATUS_FOR_EVENT` in `hub.ts`; the alarm marks silent sessions `stale` and prunes old rows.
@@ -65,7 +65,8 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 - **`DEV_SKIP_AUTH=1` bypasses the gate only for hostname `localhost`/`127.0.0.1`.** It is passed on the `npm run dev` command line, never in `.dev.vars` or `.dev.vars.example` (the deploy button would prompt it in). Don't add `--local-upstream` to `npm run dev`: it rewrites every Host to localhost, so DNS rebinding would get through. For real passkey login locally, set `SETUP_CODE` in `server/.dev.vars` and run `npx wrangler dev --local-upstream localhost:8787` without the `--var`.
 - **Lockout** check and failure record happen in one synchronous Hub step (`claimAttempt`, `trySetupCode`, `redeemPairingCode`), so parallel guesses can't race past it. There are no global ceilings, so a stranger can only lock their own prefix; that relies on the 32-character `SETUP_CODE` minimum. Login verify has no failure lock on purpose.
 - **Usage column names are interpolated into SQL;** only use names from `USAGE_COLUMNS`.
-- **`/auth/*` is rate limited** by the `AUTH_LIMITER` binding (60/min per client prefix, per Cloudflare location) before anything reaches the Hub. It is skipped on `localhost`, where every request shares one client key.
+- **Two rate limit bindings** run before any Hub call, both skipped on `localhost` (where every request shares one client key): `AUTH_LIMITER` (60/min per client prefix, per Cloudflare location) covers a `POST` to `/auth/*` only; `GATE_LIMITER` (1200/min per client prefix) covers everything else, including ingest and a non-`POST` `/auth/*` request (so a GET there can't reach `readSession`'s Hub call unbudgeted).
+- **A bearer or session-cookie value of the wrong shape** (`^cs_[A-Za-z0-9_-]{43}$` / `^[A-Za-z0-9_-]{43}$`, matching `randomToken` in `authstore.ts`) is rejected in `auth.ts` without a Hub call. `/auth/pair` is exempt from the general Origin check (its pairing code is the credential) but only accepts an absent `Origin`, the Worker's own, or the widget's fixed `tauri://localhost` — anything else, including `"null"`, is rejected.
 - **An OTLP body seen in the last hour is a retry** (`otlp_batches` keeps body digests), so a delta export is never counted twice. Real exports differ because every point carries `timeUnixNano`.
 - **Security headers** are added to every response except 101, including thrown-error 500s. A page that loads anything cross-origin needs the CSP widened.
 - **report.sh** always exits 0 silently, never blocks (git and curl run in a background subshell), and keeps the token out of argv (`curl -K -`).
@@ -78,6 +79,7 @@ widget/                   Tauri v2 NSPanel showing the dashboard; ui/index.html 
 - `src/chrome.js` only draws the hover chrome; `hit()` in `main.rs` does the hit-testing, so their sizes must agree.
 - `tauri_panel!` already imports `NSEvent`, `NSWindow`, `NSPoint`/`NSRect`/`NSSize`, `MainThreadMarker`, `msg_send` and `AnyObject`; importing them again fails with E0252.
 - `widget/icons/icon.png` must exist, or `tauri::generate_context!` fails to compile.
+- Only the tray "Pair with server…" handler moves `Pin` to `Resetting`. A `Paired` widget denies navigation to `tauri://localhost`. `Resetting` becomes `Unpaired` only once the local page finishes loading.
 
 ## Testing
 
@@ -96,6 +98,7 @@ TypeScript `strict`, 2-space indent, double quotes, semicolons. snake_case for D
 
 - `SETUP_CODE` (`npx wrangler secret put SETUP_CODE`, at least 32 characters, e.g. `openssl rand -hex 16`) registers the first passkey and recovers a lost one. `.dev.vars.example` leaves it blank on purpose.
 - Per machine: the token comes from `CESSION_TOKEN`, or else from `~/.config/cession/token` (`$XDG_CONFIG_HOME` aware), which `/cession:setup` fills through a device login. The skill only runs `plugin/skills/setup/setup.sh` (checks, `login.sh`, settings merge; exit 3 asks before replacing OTel settings). The token never passes through the chat, argv or stdout; `/cession:setup` writes `CESSION_URL` and the OTel vars to `~/.claude/settings.json`; `CESSION_MACHINE` overrides `hostname -s`.
+- A file token is bound to the server origin `login.sh` saves in `~/.config/cession/origin`. `report.sh` sends a file token only to that origin, except on a legacy install with no origin file, which still sends. The `otelHeadersHelper` setup.sh installs fails closed: it sends a file token only when every configured OTLP endpoint is under the saved origin. A token from `CESSION_TOKEN` carries no origin binding.
 
 ## Pitfalls
 

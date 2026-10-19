@@ -1,39 +1,9 @@
-import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SoftAuthenticator } from "./authenticator";
-import { BASE, authEnv as baseEnv, cookieOf, fetchWith, hub, resetFailures, sql } from "./helpers";
-
-const SETUP = "s3tup-0123456789abcdef0123456789abcdef";
-const authEnv = { ...baseEnv, SETUP_CODE: SETUP } as Env;
-
-function call(path: string, body?: unknown, cookie?: string, e: Env = authEnv, ip?: string) {
-  const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": "vitest" };
-  if (cookie) headers.Cookie = `__Host-cession=${cookie}`;
-  if (ip) headers["CF-Connecting-IP"] = ip;
-  return fetchWith(path, body === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(body) }, e);
-}
-
-async function register(auth: SoftAuthenticator, body: object = { setup_code: SETUP }, cookie?: string) {
-  const opts = await call("/auth/register/options", body, cookie);
-  expect(opts.status).toBe(200);
-  return { response: await auth.register((await opts.json()) as PublicKeyCredentialCreationOptionsJSON, BASE) };
-}
-
-async function assertion(auth: SoftAuthenticator, ip?: string) {
-  const opts = await call("/auth/login/options", {}, undefined, authEnv, ip);
-  expect(opts.status).toBe(200);
-  return auth.login((await opts.json()) as PublicKeyCredentialRequestOptionsJSON, BASE);
-}
+import { SETUP, assertion, call, cookieOf, fetchWith, hub, newSession, owner, register, resetFailures, setupEnv as authEnv, sql, uid } from "./helpers";
 
 const login = async (auth: SoftAuthenticator, ip?: string) =>
   call("/auth/login/verify", { response: await assertion(auth, ip) }, undefined, authEnv, ip);
-
-/** Registers a first passkey with the setup code; returns it and its browser session cookie. */
-async function owner() {
-  const auth = await SoftAuthenticator.create();
-  const body = await register(auth);
-  return { auth, id: body.response.id, cookie: cookieOf(await call("/auth/register/verify", body))! };
-}
 
 const counterOf = (id: string) =>
   sql<{ counter: number }>("SELECT counter FROM passkeys WHERE id = ?", id).then(([r]) => r.counter);
@@ -106,17 +76,60 @@ describe("passkeys", () => {
   it("removing a passkey ends every session, token and pairing code that descends from it", async () => {
     const { auth, id, cookie: first } = await owner();
     const second = cookieOf(await login(auth))!;
-    const { token } = (await (await call("/api/machines", { name: "m" }, first)).json()) as { token: string };
-    const { code } = (await (await call("/api/pairing", {}, first)).json()) as { code: string };
-    const pending = (await (await call("/api/pairing", {}, first)).json()) as { code: string };
+    const { token } = (await (await call("/api/machines", { name: "m", assertion: await assertion(auth) }, first)).json()) as { token: string };
+    const { code } = (await (await call("/api/pairing", { assertion: await assertion(auth) }, first)).json()) as { code: string };
+    const pending = (await (await call("/api/pairing", { assertion: await assertion(auth) }, first)).json()) as { code: string };
     const widget = await hub().redeemPairingCode(code, "w", "192.0.2.50");
     expect(widget.status).toBe("ok");
-    const other = await hub().createSession("browser", "other");
-    expect((await fetchWith(`/api/devices/passkey/${id}`, { method: "DELETE", headers: { Cookie: `__Host-cession=${other}` } })).status).toBe(204);
+    const other = await newSession("browser", "other");
+    const remove = { method: "DELETE", headers: { Cookie: `__Host-cession=${other}` }, body: JSON.stringify({ assertion: await assertion(auth) }) };
+    expect((await fetchWith(`/api/devices/passkey/${id}`, remove)).status).toBe(204);
     for (const raw of [first, second, (widget as { raw: string }).raw]) expect(await hub().getSession(raw)).toBeNull();
     expect(await hub().checkMachineToken(token)).toBe(false);
     expect((await hub().redeemPairingCode(pending.code, "w", "192.0.2.51")).status).toBe("bad");
     expect((await call("/api/sessions", undefined, other)).status).toBe(200);
+  });
+
+  it("needs a fresh assertion to remove a passkey", async () => {
+    const { auth, id, cookie } = await owner();
+    const remove = (body?: unknown) =>
+      fetchWith(`/api/devices/passkey/${id}`, { method: "DELETE", headers: { Cookie: `__Host-cession=${cookie}` }, body: body === undefined ? undefined : JSON.stringify(body) }, authEnv);
+    const bare = await remove();
+    expect(bare.status).toBe(401);
+    expect(await bare.text()).toBe("reauthenticate");
+    expect((await remove({ assertion: await assertion(await SoftAuthenticator.create()) })).status).toBe(401);
+    expect(await hub().getPasskey(id)).not.toBeNull();
+    expect((await remove({ assertion: await assertion(auth) })).status).toBe(204);
+    expect(await hub().getPasskey(id)).toBeNull();
+  });
+
+  it("ties credentials to the passkey that signed the step-up, not the session's", async () => {
+    const { auth: a, cookie } = await owner();
+    const b = await SoftAuthenticator.create();
+    const added = await register(b, { assertion: await assertion(a) }, cookie);
+    expect((await call("/auth/register/verify", added, cookie)).status).toBe(204);
+    const bId = added.response.id;
+
+    const { token } = (await (await call("/api/machines", { name: "m", assertion: await assertion(b) }, cookie)).json()) as { token: string };
+    const { code } = (await (await call("/api/pairing", { assertion: await assertion(b) }, cookie)).json()) as { code: string };
+    const { device_code, user_code } = await hub().createDeviceCode(uid("mac"), "192.0.2.91");
+    expect((await call("/api/device/approve", { code: user_code, assertion: await assertion(b) }, cookie)).status).toBe(204);
+
+    expect(await hub().revoke("passkey", bId)).toBe(true);
+    expect(await hub().checkMachineToken(token)).toBe(false);
+    expect((await hub().redeemPairingCode(code, "w", "192.0.2.92")).status).toBe("bad");
+    expect(await hub().pollDeviceCode(device_code)).toBe("expired");
+    expect(await hub().getSession(cookie)).not.toBeNull();
+  });
+
+  it("creates nothing descending from a passkey once it is removed", async () => {
+    const { id } = await owner();
+    const { user_code } = await hub().createDeviceCode(uid("mac"), "192.0.2.90");
+    expect(await hub().revoke("passkey", id)).toBe(true);
+    expect(await hub().createMachineToken("m", id)).toBeNull();
+    expect(await hub().createPairingCode(id)).toBeNull();
+    expect(await hub().createSession("browser", "b", id)).toBeNull();
+    expect(await hub().approveDeviceCode(user_code, id)).toBe(false);
   });
 
   it("answers a JSON null body with 400, not 500", async () => {
@@ -167,7 +180,7 @@ describe("passkeys", () => {
   });
 
   it("does not let a widget session skip the setup code", async () => {
-    const raw = await hub().createSession("widget", "w");
+    const raw = await newSession("widget", "w");
     expect((await call("/auth/register/options", {}, raw)).status).toBe(401);
   });
 
@@ -201,7 +214,7 @@ describe("passkeys", () => {
   });
 
   it("logout revokes the session and clears the cookie", async () => {
-    const raw = await hub().createSession("browser", "b");
+    const raw = await newSession("browser", "b");
     const res = await call("/auth/logout", {}, raw);
     expect(res.status).toBe(204);
     expect(res.headers.get("Set-Cookie")).toMatch(/^__Host-cession=; .*Max-Age=0$/);

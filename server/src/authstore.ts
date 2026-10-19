@@ -32,6 +32,9 @@ const CHALLENGE_TTL_MS = 5 * 60_000;
 const LOCK_WINDOW_MS = 10 * 60_000;
 const PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const PAIRING_LENGTH = 8;
+// Appended to an INSERT ... SELECT or UPDATE, binding the passkey id twice: a row descending from a
+// passkey is written only while that passkey exists, in the same statement as the write.
+const PASSKEY_LIVE = `(? IS NULL OR EXISTS (SELECT 1 FROM passkeys WHERE id = ?))`;
 
 // No global ceilings, so strangers can only lock their own prefixes: setup codes are at least
 // 32 characters and pairing codes single-use, 31^8 and live 10 minutes, so guessing stays hopeless.
@@ -114,15 +117,16 @@ export function pairingCode(): string {
 
 export const normalizeCode = (input: string) => input.toUpperCase().replaceAll(/[\s-]/g, "");
 
-export async function createMachineToken(sql: SqlStorage, name: string, passkeyId: string | null): Promise<{ id: string; token: string }> {
+/** null when the passkey it would descend from is gone. */
+export async function createMachineToken(sql: SqlStorage, name: string, passkeyId: string | null): Promise<{ id: string; token: string } | null> {
   const token = randomToken("cs_");
   const id = crypto.randomUUID();
   const hash = await sha256hex(token);
-  sql.exec(
-    `INSERT INTO machine_tokens (id, name, hash, created_at, last_used, passkey_id) VALUES (?, ?, ?, ?, NULL, ?)`,
-    id, name, hash, Date.now(), passkeyId,
+  const { rowsWritten } = sql.exec(
+    `INSERT INTO machine_tokens (id, name, hash, created_at, last_used, passkey_id) SELECT ?, ?, ?, ?, NULL, ? WHERE ${PASSKEY_LIVE}`,
+    id, name, hash, Date.now(), passkeyId, passkeyId, passkeyId,
   );
-  return { id, token };
+  return rowsWritten ? { id, token } : null;
 }
 
 export async function checkMachineToken(sql: SqlStorage, token: string): Promise<boolean> {
@@ -146,17 +150,18 @@ export function migrateAuth(sql: SqlStorage): void {
   added("pairing_codes");
 }
 
-export async function createSession(sql: SqlStorage, kind: SessionKind, label: string, passkeyId: string | null): Promise<string> {
+/** null when the passkey it would descend from is gone. */
+export async function createSession(sql: SqlStorage, kind: SessionKind, label: string, passkeyId: string | null): Promise<string | null> {
   const raw = randomToken("");
   const id = crypto.randomUUID();
   const hash = await sha256hex(raw);
   const now = Date.now();
   sql.exec(`DELETE FROM auth_sessions WHERE expires_at < ?`, now);
-  sql.exec(
-    `INSERT INTO auth_sessions (id, kind, hash, label, created_at, last_used, expires_at, passkey_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    id, kind, hash, label, now, now, now + SESSION_TTL_MS, passkeyId,
+  const { rowsWritten } = sql.exec(
+    `INSERT INTO auth_sessions (id, kind, hash, label, created_at, last_used, expires_at, passkey_id) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${PASSKEY_LIVE}`,
+    id, kind, hash, label, now, now, now + SESSION_TTL_MS, passkeyId, passkeyId, passkeyId,
   );
-  return raw;
+  return rowsWritten ? raw : null;
 }
 
 export async function getSession(sql: SqlStorage, raw: string): Promise<Session | null> {
@@ -176,12 +181,16 @@ export async function getSession(sql: SqlStorage, raw: string): Promise<Session 
   return { id: row.id, kind: row.kind, passkey_id: row.passkey_id };
 }
 
-export async function createPairingCode(sql: SqlStorage, passkeyId: string | null): Promise<{ code: string; expires_at: number }> {
+/** null when the passkey it would descend from is gone. */
+export async function createPairingCode(sql: SqlStorage, passkeyId: string | null): Promise<{ code: string; expires_at: number } | null> {
   const code = pairingCode();
   const expires_at = Date.now() + PAIRING_TTL_MS;
   const hash = await sha256hex(code);
-  sql.exec(`INSERT INTO pairing_codes (hash, expires_at, passkey_id) VALUES (?, ?, ?)`, hash, expires_at, passkeyId);
-  return { code, expires_at };
+  const { rowsWritten } = sql.exec(
+    `INSERT INTO pairing_codes (hash, expires_at, passkey_id) SELECT ?, ?, ? WHERE ${PASSKEY_LIVE}`,
+    hash, expires_at, passkeyId, passkeyId, passkeyId,
+  );
+  return rowsWritten ? { code, expires_at } : null;
 }
 
 export type Attempt = "ok" | "locked" | "bad";
@@ -200,7 +209,8 @@ export async function redeemPairingCode(
   const code = sql.exec<{ passkey_id: string | null }>(`DELETE FROM pairing_codes WHERE hash = ? RETURNING passkey_id`, hash).toArray()[0]; // single use
   if (!code) return { status: "bad" };
   clearAttempt(sql, attempt);
-  return { status: "ok", raw: await createSession(sql, "widget", label, code.passkey_id) };
+  const raw = await createSession(sql, "widget", label, code.passkey_id);
+  return raw ? { status: "ok", raw } : { status: "bad" };
 }
 
 export type DeviceRequest = { name: string; ip: string; created_at: number };
@@ -227,8 +237,8 @@ export function lookupDeviceCode(sql: SqlStorage, input: string): DeviceRequest 
 
 export function approveDeviceCode(sql: SqlStorage, input: string, passkeyId: string | null): boolean {
   return sql.exec(
-    `UPDATE device_codes SET approved = 1, passkey_id = ? WHERE user_code = ? AND approved = 0 AND expires_at >= ?`,
-    passkeyId, normalizeCode(input), Date.now(),
+    `UPDATE device_codes SET approved = 1, passkey_id = ? WHERE user_code = ? AND approved = 0 AND expires_at >= ? AND ${PASSKEY_LIVE}`,
+    passkeyId, normalizeCode(input), Date.now(), passkeyId, passkeyId,
   ).rowsWritten > 0;
 }
 
@@ -244,7 +254,8 @@ export async function pollDeviceCode(sql: SqlStorage, deviceCode: string): Promi
   if (!row.approved) return "pending";
   // Deleted before the await, so a racing poll can't mint a second token.
   sql.exec(`DELETE FROM device_codes WHERE hash = ?`, hash);
-  return { token: (await createMachineToken(sql, row.name, row.passkey_id)).token };
+  const created = await createMachineToken(sql, row.name, row.passkey_id);
+  return created ? { token: created.token } : "expired";
 }
 
 export function putChallenge(sql: SqlStorage, challenge: string, purpose: ChallengePurpose): void {

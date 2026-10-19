@@ -1,10 +1,16 @@
 import type { Session } from "./authstore";
 import type { Hub } from "./hub";
 
+// Matches randomToken() in authstore.ts: unpadded base64url of 32 bytes, "cs_"-prefixed or not; the wrong shape saves a Hub call.
+const TOKEN_RE = /^cs_[A-Za-z0-9_-]{43}$/;
+const SESSION_RE = /^[A-Za-z0-9_-]{43}$/;
+
 /** Machine tokens are looked up by hash, so the comparison leaks no timing about the token. */
 export async function ingestAuthorized(req: Request, hub: DurableObjectStub<Hub>): Promise<boolean> {
   const auth = req.headers.get("Authorization") ?? "";
-  return auth.startsWith("Bearer ") && hub.checkMachineToken(auth.slice("Bearer ".length));
+  if (!auth.startsWith("Bearer ")) return false;
+  const token = auth.slice("Bearer ".length);
+  return TOKEN_RE.test(token) && hub.checkMachineToken(token);
 }
 
 export const isLocalhost = (req: Request) => ["localhost", "127.0.0.1"].includes(new URL(req.url).hostname);
@@ -18,7 +24,7 @@ export async function readSession(
   // stray DEV_SKIP_AUTH=1 can't disable auth once deployed.
   if (env.DEV_SKIP_AUTH === "1" && isLocalhost(req)) return { id: "dev", kind: "browser", passkey_id: null };
   const raw = req.headers.get("Cookie")?.match(/(?:^|;\s*)__Host-cession=([^;]+)/)?.[1];
-  return raw ? hub.getSession(raw) : null;
+  return raw && SESSION_RE.test(raw) ? hub.getSession(raw) : null;
 }
 
 // Max-Age is the browser's 400-day cap; the server-side sliding expires_at decides validity.
@@ -31,6 +37,11 @@ export function sameOrigin(req: Request): boolean {
   const origin = req.headers.get("Origin");
   return !origin || origin === new URL(req.url).origin;
 }
+
+// /auth/pair accepts no Origin at all, the Worker's own origin, or the widget's fixed scheme;
+// anything else - including a sandboxed iframe's "null" - is a forged pairing post.
+export const allowedPairOrigin = (req: Request): boolean =>
+  sameOrigin(req) || req.headers.get("Origin") === "tauri://localhost";
 
 /** The caller's /64 and, for IPv6, its /48, since one tenant can own a whole /48. */
 export const clientKeys = (req: Request) => [...new Set([clientKey(req), clientKey(req, 48)])];

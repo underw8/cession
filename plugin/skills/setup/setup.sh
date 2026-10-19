@@ -4,7 +4,8 @@
 # settings into ~/.claude/settings.json. Never prints the token.
 #
 # Usage: setup.sh URL [--yes]
-# Exit:  0 done · 1 error (message on stderr) · 3 existing OTel settings differ; rerun with --yes to replace them
+# Exit:  0 done · 1 error (message on stderr) · 3 existing OTel settings differ (rerun with --yes to replace them)
+#        or would leak the token to another OTLP exporter (--yes does not override)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 url=${1:-}
@@ -22,6 +23,9 @@ for dep in jq curl; do
 done
 
 token_file="${XDG_CONFIG_HOME:-$HOME/.config}/cession/token"
+origin_file="${XDG_CONFIG_HOME:-$HOME/.config}/cession/origin"
+rest=${url#*://}
+origin="${url%%://*}://${rest%%/*}"
 token() { printf '%s' "${CESSION_TOKEN:-$(cat "$token_file" 2>/dev/null)}"; }
 # 400 means the server knows the token and rejected only the empty event.
 check() {
@@ -32,7 +36,13 @@ check() {
 # Machine tokens are cs_ + base64url; anything else could smuggle options into curl's -K config.
 case "$(token)" in *[!A-Za-z0-9_-]*) fail "the token has unexpected characters; create a new one on the Devices page" ;; esac
 
-[ -n "$(token)" ] || sh "$here/login.sh" "$url"
+# A saved token is never sent to another origin; that server gets its own device login.
+upgrading=""
+[ -z "${CESSION_TOKEN:-}" ] && [ -n "$(token)" ] && [ "$(cat "$origin_file" 2>/dev/null)" != "$origin" ] && upgrading=1
+if [ -z "$(token)" ] || [ -n "$upgrading" ]; then
+  sh "$here/login.sh" "$url"
+  [ -n "$upgrading" ] && echo "The old token is still valid; revoke it for this machine on the Devices page once the new one works."
+fi
 code=$(check) || code=000
 if [ "$code" = 401 ] && [ -z "${CESSION_TOKEN:-}" ]; then
   echo "The saved token was rejected (revoked?); logging this machine in again."
@@ -51,22 +61,41 @@ mkdir -p "$HOME/.claude"
 jq -e . "$f" >/dev/null 2>&1 || fail "$f is not valid JSON; nothing changed"
 
 # Builds the OTel auth header at runtime from the same token source, so settings.json holds no secret.
+# A file token is added only when every OTLP endpoint the header can reach (project settings may
+# enable logs or traces at runtime) is under the saved origin; no readable origin, no header.
 # shellcheck disable=SC2016 # expanded later by the helper's own shell, not here
-helper='sh -c '\''t=${CESSION_TOKEN:-$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/cession/token" 2>/dev/null)}; printf "%s\n" "$t" | jq -Rc "{Authorization: (\"Bearer \" + .)}"'\'''
+helper='sh -c '\''d=${XDG_CONFIG_HOME:-$HOME/.config}/cession; t=${CESSION_TOKEN:-}; if [ -z "$t" ]; then if o=$(cat "$d/origin" 2>/dev/null); then ok=$o; u() { case "$1" in "$o"/*) ;; *) ok= ;; esac; }; for v in "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" "$OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" "$OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"; do [ -z "$v" ] || u "$v"; done; u "${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}"; case "$OTEL_LOGS_EXPORTER" in *[oO][tT][lL][pP]*) u "${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}" ;; esac; case "$OTEL_TRACES_EXPORTER" in *[oO][tT][lL][pP]*) u "${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}" ;; esac; [ -z "$ok" ] || t=$(cat "$d/token" 2>/dev/null); fi; fi; printf "%s\n" "$t" | jq -Rc "{Authorization: (\"Bearer \" + .)}"'\'''
 
-# Existing OTel settings that this setup would change; header values are never shown.
-differs=$(jq -r --arg u "$url" --arg helper "$helper" '
+# Existing OTel settings, each tagged with what the merge below does to it; header values are never shown.
+# otelHeadersHelper applies to every OTLP exporter, so generic or logs/traces OTLP settings block setup even with --yes.
+settings=$(jq -r --arg u "$url" --arg helper "$helper" '
+  def show: if (.key | test("HEADERS")) then "\(.key)=<redacted>" else "\(.key)=\(.value)" end;
   {OTEL_METRICS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/json", OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ($u + "/v1/metrics")} as $want
-  | ((.env // {}) | to_entries[] | select(.key | startswith("OTEL_")) | select($want[.key] != .value)
-      | if (.key | test("HEADERS")) then "\(.key)=<redacted>" else "\(.key)=\(.value)" end),
-    (.otelHeadersHelper // empty | select(. != $helper) | "otelHeadersHelper=\(.)")' "$f")
-if [ -n "$differs" ] && [ "$yes" != "--yes" ]; then
+  | ((.env // {}) | to_entries[] | select(.key | startswith("OTEL_"))
+      | .key as $k | if ($k | IN("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+          or (($k == "OTEL_LOGS_EXPORTER" or $k == "OTEL_TRACES_EXPORTER") and (.value | tostring | ascii_downcase | test("otlp")))
+        then "block \(show)"
+        elif $k == "OTEL_EXPORTER_OTLP_METRICS_HEADERS" or ($want | has($k)) then select($want[.key] != .value) | "replace \(show)"
+        else "keep \(show)" end),
+    (.otelHeadersHelper // empty | select(. != $helper) | "replace otelHeadersHelper=\(.)")' "$f")
+blocked=$(printf '%s\n' "$settings" | sed -n 's/^block //p')
+replaced=$(printf '%s\n' "$settings" | sed -n 's/^replace //p')
+kept=$(printf '%s\n' "$settings" | sed -n 's/^keep //p')
+if [ -n "$blocked" ]; then
+  echo "These settings in $f make Claude Code send the cession token to another OTLP exporter, or other headers to cession:"
+  printf '%s\n' "$blocked"
+  echo "Remove them from $f and run setup again; --yes does not override this."
+  exit 3
+fi
+if [ -n "$replaced" ] && [ "$yes" != "--yes" ]; then
   echo "These existing settings in $f would be replaced:"
-  printf '%s\n' "$differs"
+  printf '%s\n' "$replaced"
+  [ -z "$kept" ] || { echo "These OTel settings are kept as they are:"; printf '%s\n' "$kept"; }
   exit 3
 fi
 
-cp "$f" "$f.bak"
+rm -f "$f.bak"
+(umask 077 && cp "$f" "$f.bak")
 jq --arg url "$url" --arg helper "$helper" '
   .env = ((.env // {}) | del(.CESSION_TOKEN, .OTEL_EXPORTER_OTLP_METRICS_HEADERS)) + {
     CESSION_URL: $url,

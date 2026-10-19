@@ -261,7 +261,7 @@ async function loadWeek() {
     $("#spark").setAttribute("viewBox", `0 0 ${W} ${H}`);
     $("#spark").innerHTML = days.map((d, i) => {
       const h = (d.cost / max) * (H - 4), x = i * bw + 4, w = bw - 8;
-      const tip = esc(`<b>${d.key}</b><br>${usd(d.cost)} · ${d.sessions} sessions`);
+      const tip = esc(`<b>${esc(d.key)}</b><br>${esc(usd(d.cost))} · ${esc(d.sessions)} sessions`);
       const fill = i === days.length - 1 ? "--bar-today" : "--bar";
       const mark = h
         ? `<path d="M${x},${H} V${H - h + 3} q0,-3 3,-3 h${w - 6} q3,0 3,3 V${H} Z" fill="var(${fill})" pointer-events="none"/>`

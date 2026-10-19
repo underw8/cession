@@ -24,7 +24,7 @@ plugin-test: ## End-to-end hook test; needs `make dev` running
 widget: ## Build and (re)launch the macOS widget in the background
 	cd widget && cargo build
 	-pkill -x cession-widget
-	nohup $(WIDGET_BIN) > /tmp/cession-widget.log 2>&1 &
+	nohup $(WIDGET_BIN) > $${TMPDIR:-/tmp}/cession-widget.log 2>&1 &
 
 widget-stop: ## Quit the widget
 	-pkill -x cession-widget
