@@ -153,7 +153,6 @@ fn main() {
         .expect("error while running cession-widget");
 }
 
-// Shared by the tray "Pair with server…" handler; see `reset_url`.
 static RESET_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A fragment-only navigate to a page already on that fragment is a same-document WebKit
