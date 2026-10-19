@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
 use tauri_nspanel::objc2_foundation::NSString;
@@ -65,6 +65,9 @@ fn main() {
         .setup(|app| {
             // Accessory apps may join other apps' fullscreen spaces.
             app.set_activation_policy(ActivationPolicy::Accessory);
+            // Shared with the tray "Pair with server…" handler, the only place allowed to clear a pin.
+            let paired: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let nav_paired = paired.clone();
             let panel = PanelBuilder::<_, Widget>::new(app.handle(), "widget")
                 .url(WebviewUrl::App("index.html".into()))
                 .size(Size::Logical(LogicalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)))
@@ -78,10 +81,9 @@ fn main() {
                 .hides_on_deactivate(false)
                 .corner_radius(CORNER_RADIUS)
                 .transparent(true)
-                .with_window(|w| {
-                    let paired = Mutex::new(None);
+                .with_window(move |w| {
                     w.decorations(false).user_agent(USER_AGENT).initialization_script(CHROME).on_navigation(move |url| {
-                        let mut paired = paired.lock().unwrap();
+                        let mut paired = nav_paired.lock().unwrap();
                         let (ok, next) = allow(paired.as_deref(), url);
                         *paired = next;
                         ok
@@ -103,7 +105,7 @@ fn main() {
                 .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .icon_as_template(true)
                 .menu(&Menu::with_items(app, &[&show, &pair, &reload, &quit])?)
-                .on_menu_event(|app, e| match e.id().as_ref() {
+                .on_menu_event(move |app, e| match e.id().as_ref() {
                     "show" => {
                         if let Ok(panel) = app.get_webview_panel("widget") {
                             panel.show();
@@ -111,6 +113,8 @@ fn main() {
                     }
                     "pair" => {
                         if let Some(window) = app.get_webview_window("widget") {
+                            // The only place allowed to clear the pin, before the local page can load again.
+                            *paired.lock().unwrap() = None;
                             let _ = window.navigate("tauri://localhost/index.html#pair".parse().unwrap());
                         }
                     }
@@ -132,11 +136,13 @@ fn main() {
         .expect("error while running cession-widget");
 }
 
-/// The local page may hand off to one remote origin, fixed until the local page loads again; returns (allowed, new origin).
+/// The local page may hand off to one remote origin, pinned until the tray "Pair with server…" handler
+/// clears it; returns (allowed, new origin). A `tauri://localhost` navigation while pinned is denied
+/// rather than treated as a reset, since only that handler is allowed to unpin.
 fn allow(paired: Option<&str>, url: &Url) -> (bool, Option<String>) {
     let keep = paired.map(String::from);
     if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
-        return (true, None);
+        return (paired.is_none(), keep);
     }
     let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1"));
     if !(url.scheme() == "https" || (url.scheme() == "http" && local)) {
@@ -524,7 +530,10 @@ mod tests {
         assert_eq!(allow(None, &u("https://cession.example.workers.dev/auth/pair")), (true, srv.clone()));
         assert_eq!(allow(srv.as_deref(), &u("https://cession.example.workers.dev/")), (true, srv.clone()));
         assert_eq!(allow(srv.as_deref(), &u("https://evil.example/")), (false, srv.clone()));
-        assert_eq!(allow(srv.as_deref(), &u("tauri://localhost/index.html#pair")), (true, None));
+        // Pinned: tauri://localhost is denied and the pin stays, since only the tray handler may clear it.
+        assert_eq!(allow(srv.as_deref(), &u("tauri://localhost/index.html#pair")), (false, srv.clone()));
+        // Tray "Pair with server…" clears the pin before navigating, so the local page then loads normally.
+        assert_eq!(allow(None, &u("tauri://localhost/index.html#pair")), (true, None));
         assert_eq!(allow(None, &u("http://example.com/")), (false, None));
         assert_eq!(allow(None, &u("http://localhost:8787/")), (true, Some("http://localhost:8787".into())));
         assert_eq!(allow(None, &u("file:///etc/passwd")), (false, None));
