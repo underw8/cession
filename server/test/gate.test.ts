@@ -89,14 +89,15 @@ describe("CSRF origin check", () => {
     expect((await fetchAs(raw, "/api/machines", evil)).status).toBe(403);
   });
 
-  it("rejects /auth/pair with a foreign http(s) Origin, but still routes a same-origin or Origin-less post", async () => {
+  it.each(["https://evil.test", "https://evil.example", "null"])("rejects /auth/pair with Origin %j", async (origin) => {
+    expect((await pair(origin)).status).toBe(403);
+  });
+
+  it.each([undefined, BASE, "tauri://localhost"])("still routes /auth/pair with Origin %j", async (origin) => {
     await resetFailures();
-    expect((await pair("https://evil.test")).status).toBe(403);
-    for (const origin of [BASE, undefined]) {
-      const res = await pair(origin);
-      expect(res.status).toBe(303);
-      expect(res.headers.get("Location")).toMatch(/\/pair\?error=1$/);
-    }
+    const res = await pair(origin);
+    expect(res.status).toBe(303);
+    expect(res.headers.get("Location")).toMatch(/\/pair\?error=1$/);
   });
 });
 
@@ -173,7 +174,7 @@ describe("gate rate limit", () => {
     expect(res.status).toBe(429);
   });
 
-  it("does not spend the shared budget on /auth/* or on localhost", async () => {
+  it("does not spend the shared budget on a POST /auth/* request or on localhost", async () => {
     const overBudget = stub(false);
     const authRes = await worker.fetch(asIncoming(new Request("https://cession.example.com/auth/device", {
       method: "POST",
@@ -183,6 +184,11 @@ describe("gate rate limit", () => {
     expect(authRes.status).not.toBe(429);
     const localRes = await worker.fetch(asIncoming(new Request(`${BASE}/login`)), overBudget);
     expect(localRes.status).not.toBe(429);
+  });
+
+  it("spends the shared budget on a non-POST /auth/* request, since it never reaches AUTH_LIMITER", async () => {
+    const res = await worker.fetch(asIncoming(new Request("https://cession.example.com/auth/device/token")), stub(false));
+    expect(res.status).toBe(429);
   });
 
   it("the real binding enforces its configured 1200/min limit", async () => {

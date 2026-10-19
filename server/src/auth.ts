@@ -40,11 +40,11 @@ export function sameOrigin(req: Request): boolean {
   return !origin || origin === new URL(req.url).origin;
 }
 
-// A page's JS can only ever send its own http(s) Origin, never the widget's "tauri:" scheme, so
-// an http(s) Origin that doesn't match the Worker is the one shape a forged pairing post can take.
-export function foreignWebOrigin(req: Request): boolean {
+// /auth/pair accepts no Origin at all, the Worker's own origin, or the widget's fixed scheme;
+// anything else - including a sandboxed iframe's "null" - is a forged pairing post.
+export function allowedPairOrigin(req: Request): boolean {
   const origin = req.headers.get("Origin");
-  return !!origin && /^https?:\/\//.test(origin) && origin !== new URL(req.url).origin;
+  return !origin || origin === new URL(req.url).origin || origin === "tauri://localhost";
 }
 
 /** The caller's /64 and, for IPv6, its /48, since one tenant can own a whole /48. */
