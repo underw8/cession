@@ -42,8 +42,8 @@ function pointUpdate(m: Metric, p: Point, resourceSession: string | undefined): 
   const sessionId = attr(p.attributes, "session.id") ?? resourceSession;
   const column = columnFor(m, p);
   const value = Number(p.asDouble ?? p.asInt ?? 0);
-  // Counters never go down, so a negative value is junk.
-  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0) return null;
+  // Counters never go down, so a negative value is junk; an oversized one is dropped alone, not with its batch.
+  if (!sessionId || sessionId.length > MAX_ID || !column || !Number.isFinite(value) || value < 0 || value > MAX_USAGE) return null;
   return { sessionId, column, value, mode: m.sum?.aggregationTemporality === 2 ? "set" : "add" };
 }
 

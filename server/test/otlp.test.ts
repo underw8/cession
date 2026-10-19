@@ -102,6 +102,14 @@ describe("parseOtlp", () => {
     }));
     expect(updates).toEqual([]);
   });
+
+  it("drops an oversized point without losing the valid one beside it", () => {
+    const [u] = parseOtlp(payload({
+      temporality: 1,
+      cost: [{ value: 5, attrs: { "session.id": "a" } }, { value: 1e13, attrs: { "session.id": "a" } }],
+    }));
+    expect(u.value).toBe(5);
+  });
 });
 
 describe("POST /v1/metrics", () => {
