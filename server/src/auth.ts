@@ -1,10 +1,18 @@
 import type { Session } from "./authstore";
 import type { Hub } from "./hub";
 
+// Matches randomToken("cs_") / randomToken("") in authstore.ts: a "cs_" prefix (or none) plus
+// unpadded base64url of 32 random bytes. A value of the wrong shape can't be a real token or
+// session, so it's rejected here without spending a Hub call on it.
+const TOKEN_RE = /^cs_[A-Za-z0-9_-]{43}$/;
+const SESSION_RE = /^[A-Za-z0-9_-]{43}$/;
+
 /** Machine tokens are looked up by hash, so the comparison leaks no timing about the token. */
 export async function ingestAuthorized(req: Request, hub: DurableObjectStub<Hub>): Promise<boolean> {
   const auth = req.headers.get("Authorization") ?? "";
-  return auth.startsWith("Bearer ") && hub.checkMachineToken(auth.slice("Bearer ".length));
+  if (!auth.startsWith("Bearer ")) return false;
+  const token = auth.slice("Bearer ".length);
+  return TOKEN_RE.test(token) && hub.checkMachineToken(token);
 }
 
 export const isLocalhost = (req: Request) => ["localhost", "127.0.0.1"].includes(new URL(req.url).hostname);
@@ -18,7 +26,7 @@ export async function readSession(
   // stray DEV_SKIP_AUTH=1 can't disable auth once deployed.
   if (env.DEV_SKIP_AUTH === "1" && isLocalhost(req)) return { id: "dev", kind: "browser", passkey_id: null };
   const raw = req.headers.get("Cookie")?.match(/(?:^|;\s*)__Host-cession=([^;]+)/)?.[1];
-  return raw ? hub.getSession(raw) : null;
+  return raw && SESSION_RE.test(raw) ? hub.getSession(raw) : null;
 }
 
 // Max-Age is the browser's 400-day cap; the server-side sliding expires_at decides validity.
@@ -30,6 +38,13 @@ export const clearCookie = () => `__Host-cession=; HttpOnly; Secure; SameSite=La
 export function sameOrigin(req: Request): boolean {
   const origin = req.headers.get("Origin");
   return !origin || origin === new URL(req.url).origin;
+}
+
+// A page's JS can only ever send its own http(s) Origin, never the widget's "tauri:" scheme, so
+// an http(s) Origin that doesn't match the Worker is the one shape a forged pairing post can take.
+export function foreignWebOrigin(req: Request): boolean {
+  const origin = req.headers.get("Origin");
+  return !!origin && /^https?:\/\//.test(origin) && origin !== new URL(req.url).origin;
 }
 
 /** The caller's /64 and, for IPv6, its /48, since one tenant can own a whole /48. */

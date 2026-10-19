@@ -1,4 +1,4 @@
-import { clearCookie, clientKey, clientKeys, ingestAuthorized, isLocalhost, isWidget, readSession, sameOrigin, sessionCookie, status } from "./auth";
+import { clearCookie, clientKey, clientKeys, foreignWebOrigin, ingestAuthorized, isLocalhost, isWidget, readSession, sameOrigin, sessionCookie, status } from "./auth";
 import { DEVICE_TTL_MS, sha256hex, type DeviceKind, type Session } from "./authstore";
 import { parseEvent } from "./event";
 import { parseOtlp } from "./otlp";
@@ -200,15 +200,25 @@ async function route(req: Request, env: Env): Promise<Response> {
   // Keys contain a space, so no lookup can hit an Object.prototype member.
   const key = `${req.method} ${url.pathname}`;
 
+  // Shared budget for everything but /auth/* (which has its own, tighter one below), before any
+  // Hub call; ingest included, since an unbounded flood there is the actual DoS risk (T23).
+  if (!url.pathname.startsWith("/auth/") && !isLocalhost(req)) {
+    const { success } = await env.GATE_LIMITER.limit({ key: clientKey(req) });
+    if (!success) return status(429, "too many requests");
+  }
+
   const ingest = INGEST[key];
   if (ingest) return ingest(c);
 
-  // CSRF check; /auth/pair is exempt because its pairing code is the credential.
+  // CSRF check; /auth/pair is exempt because its pairing code is the credential, but a forged
+  // post from a browser still carries its real http(s) Origin, which the widget's "tauri:" one never is.
   if ((req.method === "POST" || req.method === "DELETE") && !sameOrigin(req) && url.pathname !== "/auth/pair")
     return status(403, "forbidden origin");
+  if (url.pathname === "/auth/pair" && foreignWebOrigin(req)) return status(403, "forbidden origin");
 
-  // Local dev and tests have no real client address, so only deployed hosts are limited.
-  if (url.pathname.startsWith("/auth/") && !isLocalhost(req)) {
+  // Local dev and tests have no real client address, so only deployed hosts are limited; GET to an
+  // /auth/* path costs nothing, so only POST (the credentialed attempt) spends the budget.
+  if (req.method === "POST" && url.pathname.startsWith("/auth/") && !isLocalhost(req)) {
     const { success } = await env.AUTH_LIMITER.limit({ key: clientKey(req) });
     if (!success) return status(429, "too many requests");
   }
