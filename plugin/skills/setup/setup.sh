@@ -37,8 +37,11 @@ check() {
 case "$(token)" in *[!A-Za-z0-9_-]*) fail "the token has unexpected characters; create a new one on the Devices page" ;; esac
 
 # A saved token is never sent to another origin; that server gets its own device login.
-if [ -z "$(token)" ] || { [ -z "${CESSION_TOKEN:-}" ] && [ "$(cat "$origin_file" 2>/dev/null)" != "$origin" ]; }; then
+upgrading=""
+[ -z "${CESSION_TOKEN:-}" ] && [ -n "$(token)" ] && [ "$(cat "$origin_file" 2>/dev/null)" != "$origin" ] && upgrading=1
+if [ -z "$(token)" ] || [ -n "$upgrading" ]; then
   sh "$here/login.sh" "$url"
+  [ -n "$upgrading" ] && echo "The old token is still valid; revoke it for this machine on the Devices page once the new one works."
 fi
 code=$(check) || code=000
 if [ "$code" = 401 ] && [ -z "${CESSION_TOKEN:-}" ]; then
