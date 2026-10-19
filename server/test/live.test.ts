@@ -1,7 +1,40 @@
+import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/server";
 import { describe, expect, it, vi } from "vitest";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import type { Snapshot } from "../src/hub";
-import { get, post, uid, hub } from "./helpers";
+import { SoftAuthenticator } from "./authenticator";
+import { BASE, authEnv as baseEnv, cookieOf, fetchWith, get, post, uid, hub } from "./helpers";
+
+const SETUP = "s3tup-0123456789abcdef0123456789abcdef";
+const authEnv = { ...baseEnv, SETUP_CODE: SETUP } as Env;
+
+/** Registers a fresh passkey-backed browser session, bypassing DEV_SKIP_AUTH. */
+async function browserSession(): Promise<{ passkeyId: string; cookie: string }> {
+  const auth = await SoftAuthenticator.create();
+  const label = uid("live-auth");
+  const optsRes = await fetchWith(
+    "/auth/register/options",
+    { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": label }, body: JSON.stringify({ setup_code: SETUP }) },
+    authEnv,
+  );
+  expect(optsRes.status).toBe(200);
+  const response = await auth.register((await optsRes.json()) as PublicKeyCredentialCreationOptionsJSON, BASE);
+  const verifyRes = await fetchWith(
+    "/auth/register/verify",
+    { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": label }, body: JSON.stringify({ response }) },
+    authEnv,
+  );
+  expect(verifyRes.status).toBe(204);
+  return { passkeyId: response.id, cookie: cookieOf(verifyRes)! };
+}
+
+async function connectAuthed(cookie: string) {
+  const res = await fetchWith("/live", { headers: { Upgrade: "websocket", Cookie: `__Host-cession=${cookie}` } }, authEnv);
+  expect(res.status).toBe(101);
+  const ws = res.webSocket!;
+  ws.accept();
+  return ws;
+}
 
 async function connect() {
   const res = await get("/live", { headers: { Upgrade: "websocket" } });
@@ -77,6 +110,24 @@ describe("GET /live", () => {
     });
     const code = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code), { once: true }));
     expect(await runDurableObjectAlarm(hub())).toBe(true);
+    await expect(code).resolves.toBe(4001);
+  });
+
+  it("closes a browser session's socket with 4001 when its passkey is removed", async () => {
+    const { passkeyId, cookie } = await browserSession();
+    const ws = await connectAuthed(cookie);
+    const code = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code), { once: true }));
+    const res = await fetchWith(`/api/devices/passkey/${passkeyId}`, { method: "DELETE", headers: { Cookie: `__Host-cession=${cookie}` } }, authEnv);
+    expect(res.status).toBe(204);
+    await expect(code).resolves.toBe(4001);
+  });
+
+  it("closes a browser session's socket with 4001 after it logs out", async () => {
+    const { cookie } = await browserSession();
+    const ws = await connectAuthed(cookie);
+    const code = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code), { once: true }));
+    const res = await fetchWith("/auth/logout", { method: "POST", headers: { Cookie: `__Host-cession=${cookie}` } }, authEnv);
+    expect(res.status).toBe(204);
     await expect(code).resolves.toBe(4001);
   });
 });
