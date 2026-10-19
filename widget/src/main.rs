@@ -123,8 +123,6 @@ fn main() {
                     }
                     "pair" => {
                         if let Some(window) = app.get_webview_window("widget") {
-                            // Only tauri://localhost is allowed until that page actually commits (see `on_load`),
-                            // so a still-loading attacker page can't use this window to pin itself.
                             let previous = {
                                 let mut pin = paired.lock().unwrap();
                                 let previous = pin.clone();
@@ -171,9 +169,7 @@ enum Pin {
     Unpaired,
     /// Only this origin may be navigated to; `tauri://localhost` is denied.
     Paired(String),
-    /// Set by the tray "Pair with server…" handler before it navigates home. Only `tauri://localhost`
-    /// is allowed, and the state stays `Resetting` until that page actually commits (see `on_load`) —
-    /// a page still loading when the tray fires can't use this window to pin itself.
+    /// Set by the tray "Pair with server…" handler; only `tauri://localhost` is allowed until that page commits (see `on_load`).
     Resetting,
 }
 
