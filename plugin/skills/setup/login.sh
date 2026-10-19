@@ -18,19 +18,22 @@ res=$(jq -nc --arg n "$name" '{name: $n}' | curl -sf --max-time 10 -X POST "$url
   { echo "cession: could not start a login at $url" >&2; exit 1; }
 field() { printf '%s' "$res" | jq -r ".$1"; }
 device=$(field device_code)
-link=$(field verification_uri_complete)
+code=$(field user_code)
 interval=$(field interval)
 expires=$(field expires_in)
-# Server values reach $(( )) and the opener; sh evaluates a[$(cmd)] in arithmetic, so only digits and our own link pass.
+# Server values reach $(( )), the terminal and Claude's context; sh evaluates a[$(cmd)] in arithmetic, so only digits pass.
 case "$interval" in '' | *[!0-9]* | 0*) interval=3 ;; esac
 case "$expires" in '' | *[!0-9]*) expires=600 ;; esac
 [ "$interval" -le 30 ] 2>/dev/null || interval=3
 [ "$expires" -le 900 ] 2>/dev/null || expires=900
-case "$link" in "$url/device?code="*) ;; *) link="$url/device" ;; esac
+# Explicit letters, not A-Z: bash 3.2 matches ranges by locale collation.
+case "$code" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-]*) code= ;; esac
+[ -n "$code" ] && [ ${#code} -le 16 ] || { echo "cession: the server returned a malformed code; nothing saved" >&2; exit 1; }
+link="$url/device?code=$code"
 
-echo "Approve \"$name\" in a browser signed in to cession:"
-echo "  $link"
-echo "  code: $(field user_code)"
+printf 'Approve "%s" in a browser signed in to cession:\n' "$name"
+printf '  %s\n' "$link"
+printf '  code: %s\n' "$code"
 # $BROWSER first: code-server sets it to open tabs on the client machine.
 for open in "${BROWSER:-}" open xdg-open; do
   if [ -n "$open" ] && command -v "$open" >/dev/null 2>&1; then "$open" "$link" >/dev/null 2>&1 & break; fi
@@ -45,7 +48,11 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ -n "$token" ]; then
     # Machine tokens are cs_ + base64url; anything else could smuggle options into curl's -K config later.
     case "$token" in *[!A-Za-z0-9_-]*) echo "cession: the server returned a malformed token; nothing saved" >&2; exit 1 ;; esac
-    (umask 077 && mkdir -p "$dir" && printf '%s\n' "$token" > "$dir/token.tmp" && mv "$dir/token.tmp" "$dir/token")
+    # The origin binds the token: report.sh and the OTel helper send it nowhere else.
+    # Token first, so a failed origin write leaves a mismatch that sends nothing.
+    rest=${url#*://}
+    (umask 077 && mkdir -p "$dir" && printf '%s\n' "$token" > "$dir/token.tmp" && mv "$dir/token.tmp" "$dir/token" &&
+      printf '%s\n' "${url%%://*}://${rest%%/*}" > "$dir/origin.tmp" && mv "$dir/origin.tmp" "$dir/origin")
     echo "Approved. Token saved to $dir/token"
     exit 0
   fi
