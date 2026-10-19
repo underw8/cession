@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
@@ -124,8 +125,16 @@ fn main() {
                         if let Some(window) = app.get_webview_window("widget") {
                             // Only tauri://localhost is allowed until that page actually commits (see `on_load`),
                             // so a still-loading attacker page can't use this window to pin itself.
-                            *paired.lock().unwrap() = Pin::Resetting;
-                            let _ = window.navigate("tauri://localhost/index.html#pair".parse().unwrap());
+                            let previous = {
+                                let mut pin = paired.lock().unwrap();
+                                let previous = pin.clone();
+                                *pin = Pin::Resetting;
+                                previous
+                            };
+                            let n = RESET_COUNTER.fetch_add(1, Ordering::Relaxed);
+                            if window.navigate(reset_url(n)).is_err() {
+                                *paired.lock().unwrap() = previous;
+                            }
                         }
                     }
                     "reload" => {
@@ -144,6 +153,15 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running cession-widget");
+}
+
+// Shared by the tray "Pair with server…" handler; see `reset_url`.
+static RESET_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A fragment-only navigate to a page already on that fragment is a same-document WebKit
+/// navigation, so `on_page_load` Finished never fires; the query makes every reset a distinct URL.
+fn reset_url(n: u64) -> Url {
+    format!("tauri://localhost/index.html?r={n}#pair").parse().unwrap()
 }
 
 /// Lifecycle of the widget's one legitimate remote origin.
@@ -594,5 +612,17 @@ mod tests {
             on_load(&srv, PageLoadEvent::Finished, &u("tauri://localhost/index.html")),
             srv
         );
+    }
+
+    #[test]
+    fn reset_url_forces_distinct_urls() {
+        let a = reset_url(1);
+        let b = reset_url(2);
+        assert_ne!(a, b);
+        for url in [&a, &b] {
+            assert_eq!(url.scheme(), "tauri");
+            assert_eq!(url.host_str(), Some("localhost"));
+            assert_eq!(url.fragment(), Some("pair"));
+        }
     }
 }
