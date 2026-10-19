@@ -85,7 +85,7 @@ echo "ok: setup.sh merges settings, keeps the token out, asks before replacing O
 
 # setup.sh refuses other OTLP exporters even with --yes, and keeps its backup private.
 home=$(mktemp -d); mkdir -p "$home/.claude"
-for s in '{"OTEL_EXPORTER_OTLP_HEADERS":"Authorization=corp-secret"}' '{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://corp.example"}' '{"OTEL_LOGS_EXPORTER":"otlp"}' '{"OTEL_TRACES_EXPORTER":"console,otlp"}'; do
+for s in '{"OTEL_EXPORTER_OTLP_HEADERS":"Authorization=corp-secret"}' '{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://corp.example"}' '{"OTEL_LOGS_EXPORTER":"otlp"}' '{"OTEL_TRACES_EXPORTER":"console,otlp"}' '{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://corp.example/v1/logs"}' '{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":"https://corp.example/v1/traces"}'; do
   printf '{"env":%s}' "$s" > "$home/.claude/settings.json"
   rc=0; HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" --yes > "$home/out" 2>&1 || rc=$?
   key=$(printf '%s' "$s" | jq -r 'keys[0]')
@@ -173,13 +173,32 @@ echo "ok: setup.sh runs device login when the URL's origin differs from the toke
 
 # The OTel headers helper adds the file token only for an endpoint under the saved origin.
 helper=$(jq -r .otelHeadersHelper "$home/.claude/settings.json")
-for e in https://new.example/v1/metrics https://new.example.evil.com/v1/metrics https://evil.example/v1/metrics; do
-  h=$(env -u CESSION_TOKEN XDG_CONFIG_HOME="$cfg" OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=$e sh -c "$helper")
-  case "$e" in https://new.example/*) want=yes ;; *) want=no ;; esac
+m=OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://new.example/v1/metrics
+while read -r want vars; do
+  # shellcheck disable=SC2086 # $vars is a list of NAME=value words
+  h=$(env -u CESSION_TOKEN XDG_CONFIG_HOME="$cfg" $vars sh -c "$helper")
   case "$h" in *cs_stubnew*) got=yes ;; *) got=no ;; esac
-  [ "$got" = "$want" ] || { echo "FAIL: helper for $e gave '$h'"; exit 1; }
-done
+  [ "$got" = "$want" ] || { echo "FAIL: helper with $vars gave '$h'"; exit 1; }
+done <<EOF
+yes $m
+no OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://new.example.evil.com/v1/metrics
+no OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://evil.example/v1/metrics
+no
+yes OTEL_EXPORTER_OTLP_ENDPOINT=https://new.example/
+no $m OTEL_EXPORTER_OTLP_ENDPOINT=https://evil.example/
+no $m OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://evil.example/v1/logs
+no $m OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://evil.example/v1/traces
+no $m OTEL_LOGS_EXPORTER=otlp
+no $m OTEL_TRACES_EXPORTER=console,otlp
+yes $m OTEL_LOGS_EXPORTER=otlp OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://new.example/v1/logs
+yes $m OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=https://new.example/
+EOF
 echo "ok: otelHeadersHelper sends the file token only to its saved origin"
+# Legacy install (no origin file yet): the helper still sends, like report.sh.
+rm "$cfg/cession/origin"
+h=$(env -u CESSION_TOKEN XDG_CONFIG_HOME="$cfg" OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://new.example/v1/metrics sh -c "$helper")
+case "$h" in *cs_stubnew*) ;; *) echo "FAIL: helper dropped the token with no origin file: '$h'"; exit 1 ;; esac
+echo "ok: otelHeadersHelper keeps sending a file token saved before origins existed"
 rm -rf "$stub"
 
 echo PASS
