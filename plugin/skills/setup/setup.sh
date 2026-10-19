@@ -40,13 +40,13 @@ case "$(token)" in *[!A-Za-z0-9_-]*) fail "the token has unexpected characters; 
 upgrading=""
 [ -z "${CESSION_TOKEN:-}" ] && [ -n "$(token)" ] && [ "$(cat "$origin_file" 2>/dev/null)" != "$origin" ] && upgrading=1
 if [ -z "$(token)" ] || [ -n "$upgrading" ]; then
-  CESSION_ORIGIN="$origin" sh "$here/login.sh" "$url"
+  sh "$here/login.sh" "$url"
   [ -n "$upgrading" ] && echo "The old token is still valid; revoke it for this machine on the Devices page once the new one works."
 fi
 code=$(check) || code=000
 if [ "$code" = 401 ] && [ -z "${CESSION_TOKEN:-}" ]; then
   echo "The saved token was rejected (revoked?); logging this machine in again."
-  CESSION_ORIGIN="$origin" sh "$here/login.sh" "$url"
+  sh "$here/login.sh" "$url"
   code=$(check) || code=000
 fi
 case "$code" in
