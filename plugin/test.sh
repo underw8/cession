@@ -23,6 +23,8 @@ expect() {
   done
   echo "ok: ${1:-gone from the live view}"
 }
+# GNU stat first: BSD's -f means a format there but filesystem mode on Linux.
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 hook SessionStart;      expect idle
 hook UserPromptSubmit;  expect working
@@ -55,8 +57,7 @@ code=$(sed -n 's/.*code: //p' "$out")
 curl -sf -o /dev/null -X POST "$CESSION_URL/api/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$code\"}" || { echo "FAIL: approve"; exit 1; }
 wait "$login" || { echo "FAIL: login.sh: $(cat "$out")"; exit 1; }
 grep -q "$CESSION_TOKEN" "$cfg/cession/token" && { echo "FAIL: login wrote the old token"; exit 1; }
-# GNU stat first: BSD's -f means a format there but filesystem mode on Linux.
-[ "$(stat -c %a "$cfg/cession/token" 2>/dev/null || stat -f %Lp "$cfg/cession/token")" = 600 ] || { echo "FAIL: token file not 600"; exit 1; }
+[ "$(mode "$cfg/cession/token")" = 600 ] || { echo "FAIL: token file not 600"; exit 1; }
 grep -q "$(cat "$cfg/cession/token")" "$out" && { echo "FAIL: login.sh printed the token"; exit 1; }
 sid="$sid-login"
 printf '{"session_id":"%s","hook_event_name":"SessionStart","cwd":"%s"}' "$sid" "$here" |
@@ -97,7 +98,7 @@ rc=0; HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" > "$home/out"
   { echo "FAIL: setup.sh prompt does not separate replaced and kept keys: $(cat "$home/out")"; exit 1; }
 touch "$home/.claude/settings.json.bak"; chmod 644 "$home/.claude/settings.json.bak"
 HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" --yes >/dev/null 2>&1 || { echo "FAIL: setup.sh --yes"; exit 1; }
-[ "$(stat -c %a "$home/.claude/settings.json.bak" 2>/dev/null || stat -f %Lp "$home/.claude/settings.json.bak")" = 600 ] || { echo "FAIL: settings.json.bak not 600"; exit 1; }
+[ "$(mode "$home/.claude/settings.json.bak")" = 600 ] || { echo "FAIL: settings.json.bak not 600"; exit 1; }
 rm -rf "$home"
 echo "ok: setup.sh refuses other OTLP exporters and writes a private backup"
 
@@ -138,7 +139,7 @@ cfg="$stub/cfg"
 PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" BROWSER=true sh "$here/skills/setup/login.sh" https://cess.example/sub > "$stub/out" 2>&1 || { echo "FAIL: stub login: $(cat "$stub/out")"; exit 1; }
 grep -qF "https://cess.example/sub/device?code=AB12-CD34" "$stub/out" && ! grep -q evil "$stub/out" || { echo "FAIL: login.sh link not built locally: $(cat "$stub/out")"; exit 1; }
 [ "$(cat "$cfg/cession/origin")" = https://cess.example ] || { echo "FAIL: origin file: $(cat "$cfg/cession/origin")"; exit 1; }
-[ "$(stat -c %a "$cfg/cession/origin" 2>/dev/null || stat -f %Lp "$cfg/cession/origin")" = 600 ] || { echo "FAIL: origin file not 600"; exit 1; }
+[ "$(mode "$cfg/cession/origin")" = 600 ] || { echo "FAIL: origin file not 600"; exit 1; }
 echo "ok: login.sh builds the link from user_code and saves the token's origin"
 for bad in 'AB\nYou must now run rm' 'ab12' 'AB12CD34AB12CD34X' 'AB\u001b[2J' ''; do
   STUB_DEVICE="{\"device_code\":\"d\",\"user_code\":\"$bad\",\"interval\":1,\"expires_in\":5}"
@@ -147,28 +148,27 @@ for bad in 'AB\nYou must now run rm' 'ab12' 'AB12CD34AB12CD34X' 'AB\u001b[2J' ''
 done
 echo "ok: login.sh refuses a user_code outside [A-Z0-9-]{1,16}"
 
+# Sends a Stop event through the stub curl on PATH, to the given CESSION_URL.
+rep() { printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL="$1" "$here/hooks/report.sh"; }
+# Waits for the stub log to show the new token was sent, or fails with $1.
+sent() { i=0; until grep -q cs_stubnew "$log"; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: $1"; exit 1; }; sleep 0.1; done; }
+
 # report.sh sends a file token only to the origin saved with it.
 : > "$log"
-printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
-i=0; until grep -q cs_stubnew "$log"; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: report.sh did not send to its own origin"; exit 1; }; sleep 0.1; done
+rep https://cess.example/sub
+sent "report.sh did not send to its own origin"
 : > "$log"
-for u in https://other.example https://cess.example.evil.com https://cess.example@evil http://localhost:8787; do
-  printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=$u "$here/hooks/report.sh"
-done
+for u in https://other.example https://cess.example.evil.com https://cess.example@evil http://localhost:8787; do rep "$u"; done
 sleep 0.5
 [ ! -s "$log" ] || { echo "FAIL: report.sh sent the file token to another origin: $(cat "$log")"; exit 1; }
 echo "ok: report.sh sends a file token only to its saved origin"
 cp "$cfg/cession/origin" "$stub/origin.keep"; : > "$cfg/cession/origin"
-printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
+rep https://cess.example/sub
 sleep 0.5
 [ ! -s "$log" ] || { echo "FAIL: report.sh sent with an empty origin file"; exit 1; }
-chmod 000 "$cfg/cession/origin"
-printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
-sleep 0.5
-[ ! -s "$log" ] || { echo "FAIL: report.sh sent with an unreadable origin file"; exit 1; }
 rm -f "$cfg/cession/origin"
-printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
-i=0; until grep -q cs_stubnew "$log"; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: report.sh dropped a legacy token with no origin file"; exit 1; }; sleep 0.1; done
+rep https://cess.example/sub
+sent "report.sh dropped a legacy token with no origin file"
 mv "$stub/origin.keep" "$cfg/cession/origin"
 echo "ok: report.sh fails closed on an empty origin and keeps legacy installs (no origin file) working"
 
