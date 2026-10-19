@@ -85,7 +85,7 @@ echo "ok: setup.sh merges settings, keeps the token out, asks before replacing O
 
 # setup.sh refuses other OTLP exporters even with --yes, and keeps its backup private.
 home=$(mktemp -d); mkdir -p "$home/.claude"
-for s in '{"OTEL_EXPORTER_OTLP_HEADERS":"Authorization=corp-secret"}' '{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://corp.example"}' '{"OTEL_LOGS_EXPORTER":"otlp"}' '{"OTEL_TRACES_EXPORTER":"console,otlp"}' '{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://corp.example/v1/logs"}' '{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":"https://corp.example/v1/traces"}'; do
+for s in '{"OTEL_EXPORTER_OTLP_HEADERS":"Authorization=corp-secret"}' '{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://corp.example"}' '{"OTEL_LOGS_EXPORTER":"otlp"}' '{"OTEL_LOGS_EXPORTER":"OTLP"}' '{"OTEL_TRACES_EXPORTER":"console,otlp"}' '{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://corp.example/v1/logs"}' '{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":"https://corp.example/v1/traces"}'; do
   printf '{"env":%s}' "$s" > "$home/.claude/settings.json"
   rc=0; HOME="$home" sh "$here/skills/setup/setup.sh" "$CESSION_URL" --yes > "$home/out" 2>&1 || rc=$?
   key=$(printf '%s' "$s" | jq -r 'keys[0]')
@@ -152,12 +152,25 @@ echo "ok: login.sh refuses a user_code outside [A-Z0-9-]{1,16}"
 printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
 i=0; until grep -q cs_stubnew "$log"; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: report.sh did not send to its own origin"; exit 1; }; sleep 0.1; done
 : > "$log"
-for u in https://other.example https://cess.example.evil.com http://localhost:8787; do
+for u in https://other.example https://cess.example.evil.com https://cess.example@evil http://localhost:8787; do
   printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=$u "$here/hooks/report.sh"
 done
 sleep 0.5
 [ ! -s "$log" ] || { echo "FAIL: report.sh sent the file token to another origin: $(cat "$log")"; exit 1; }
 echo "ok: report.sh sends a file token only to its saved origin"
+cp "$cfg/cession/origin" "$stub/origin.keep"; : > "$cfg/cession/origin"
+printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
+sleep 0.5
+[ ! -s "$log" ] || { echo "FAIL: report.sh sent with an empty origin file"; exit 1; }
+chmod 000 "$cfg/cession/origin"
+printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
+sleep 0.5
+[ ! -s "$log" ] || { echo "FAIL: report.sh sent with an unreadable origin file"; exit 1; }
+rm -f "$cfg/cession/origin"
+printf '{"session_id":"x","hook_event_name":"Stop"}' | env -u CESSION_TOKEN PATH="$stub:$PATH" XDG_CONFIG_HOME="$cfg" CESSION_URL=https://cess.example/sub "$here/hooks/report.sh"
+i=0; until grep -q cs_stubnew "$log"; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: report.sh dropped a legacy token with no origin file"; exit 1; }; sleep 0.1; done
+mv "$stub/origin.keep" "$cfg/cession/origin"
+echo "ok: report.sh fails closed on an empty origin and keeps legacy installs (no origin file) working"
 
 # setup.sh for a new server logs in there instead of sending the saved token to it.
 home="$stub/home"; mkdir -p "$home"; : > "$log"
@@ -183,6 +196,8 @@ done <<EOF
 yes $m
 no OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://new.example.evil.com/v1/metrics
 no OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://evil.example/v1/metrics
+no OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://new.example@evil.com/v1/metrics
+no $m OTEL_LOGS_EXPORTER=OTLP
 no
 yes OTEL_EXPORTER_OTLP_ENDPOINT=https://new.example/
 no $m OTEL_EXPORTER_OTLP_ENDPOINT=https://evil.example/
@@ -194,11 +209,11 @@ yes $m OTEL_LOGS_EXPORTER=otlp OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://new.exam
 yes $m OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=https://new.example/
 EOF
 echo "ok: otelHeadersHelper sends the file token only to its saved origin"
-# Legacy install (no origin file yet): the helper still sends, like report.sh.
+# The helper fails closed without an origin; setup.sh always leaves one.
 rm "$cfg/cession/origin"
 h=$(env -u CESSION_TOKEN XDG_CONFIG_HOME="$cfg" OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://new.example/v1/metrics sh -c "$helper")
-case "$h" in *cs_stubnew*) ;; *) echo "FAIL: helper dropped the token with no origin file: '$h'"; exit 1 ;; esac
-echo "ok: otelHeadersHelper keeps sending a file token saved before origins existed"
+case "$h" in *cs_stubnew*) echo "FAIL: helper sent the token with no origin file"; exit 1 ;; esac
+echo "ok: otelHeadersHelper sends no file token without a saved origin"
 rm -rf "$stub"
 
 echo PASS

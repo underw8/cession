@@ -58,10 +58,10 @@ mkdir -p "$HOME/.claude"
 jq -e . "$f" >/dev/null 2>&1 || fail "$f is not valid JSON; nothing changed"
 
 # Builds the OTel auth header at runtime from the same token source, so settings.json holds no secret.
-# Like report.sh: once an origin is saved, a file token is added only when every OTLP endpoint the
-# header can reach (project settings may enable logs or traces at runtime) is under that origin.
+# A file token is added only when every OTLP endpoint the header can reach (project settings may
+# enable logs or traces at runtime) is under the saved origin; no readable origin, no header.
 # shellcheck disable=SC2016 # expanded later by the helper's own shell, not here
-helper='sh -c '\''d=${XDG_CONFIG_HOME:-$HOME/.config}/cession; t=${CESSION_TOKEN:-}; if [ -z "$t" ]; then if o=$(cat "$d/origin" 2>/dev/null); then ok=$o; u() { case "$1" in "$o"/*) ;; *) ok= ;; esac; }; for v in "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" "$OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" "$OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"; do [ -z "$v" ] || u "$v"; done; u "${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}"; case "$OTEL_LOGS_EXPORTER" in *otlp*) u "${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}" ;; esac; case "$OTEL_TRACES_EXPORTER" in *otlp*) u "${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}" ;; esac; [ -z "$ok" ] || t=$(cat "$d/token" 2>/dev/null); else t=$(cat "$d/token" 2>/dev/null); fi; fi; printf "%s\n" "$t" | jq -Rc "{Authorization: (\"Bearer \" + .)}"'\'''
+helper='sh -c '\''d=${XDG_CONFIG_HOME:-$HOME/.config}/cession; t=${CESSION_TOKEN:-}; if [ -z "$t" ]; then if o=$(cat "$d/origin" 2>/dev/null); then ok=$o; u() { case "$1" in "$o"/*) ;; *) ok= ;; esac; }; for v in "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" "$OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" "$OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"; do [ -z "$v" ] || u "$v"; done; u "${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}"; case "$OTEL_LOGS_EXPORTER" in *[oO][tT][lL][pP]*) u "${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}" ;; esac; case "$OTEL_TRACES_EXPORTER" in *[oO][tT][lL][pP]*) u "${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-$OTEL_EXPORTER_OTLP_ENDPOINT}" ;; esac; [ -z "$ok" ] || t=$(cat "$d/token" 2>/dev/null); fi; fi; printf "%s\n" "$t" | jq -Rc "{Authorization: (\"Bearer \" + .)}"'\'''
 
 # Existing OTel settings, each tagged with what the merge below does to it; header values are never shown.
 # otelHeadersHelper applies to every OTLP exporter, so generic or logs/traces OTLP settings block setup even with --yes.
@@ -70,7 +70,7 @@ settings=$(jq -r --arg u "$url" --arg helper "$helper" '
   {OTEL_METRICS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/json", OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ($u + "/v1/metrics")} as $want
   | ((.env // {}) | to_entries[] | select(.key | startswith("OTEL_"))
       | .key as $k | if ($k | IN("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
-          or (($k == "OTEL_LOGS_EXPORTER" or $k == "OTEL_TRACES_EXPORTER") and (.value | tostring | test("otlp")))
+          or (($k == "OTEL_LOGS_EXPORTER" or $k == "OTEL_TRACES_EXPORTER") and (.value | tostring | ascii_downcase | test("otlp")))
         then "block \(show)"
         elif $k == "OTEL_EXPORTER_OTLP_METRICS_HEADERS" or ($want | has($k)) then select($want[.key] != .value) | "replace \(show)"
         else "keep \(show)" end),

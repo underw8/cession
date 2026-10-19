@@ -4,8 +4,10 @@
 # the shell profile (code-server, apps launched from the Dock).
 token=${CESSION_TOKEN:-$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/cession/token" 2>/dev/null)}
 [ -n "${CESSION_URL:-}" ] && [ -n "$token" ] || exit 0
-# A file token goes only to the origin login.sh saved with it.
-if [ -z "${CESSION_TOKEN:-}" ] && origin=$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/cession/origin" 2>/dev/null); then
+# A file token goes only to the origin login.sh saved with it; no origin file means an install from before origins.
+origin_file="${XDG_CONFIG_HOME:-$HOME/.config}/cession/origin"
+if [ -z "${CESSION_TOKEN:-}" ] && [ -e "$origin_file" ]; then
+  origin=$(cat "$origin_file" 2>/dev/null) && [ -n "$origin" ] || exit 0
   rest=${CESSION_URL#*://}
   [ "${CESSION_URL%%://*}://${rest%%/*}" = "$origin" ] || exit 0
 fi
