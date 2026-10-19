@@ -21,6 +21,12 @@ device=$(field device_code)
 link=$(field verification_uri_complete)
 interval=$(field interval)
 expires=$(field expires_in)
+# Server values reach $(( )) and the opener; sh evaluates a[$(cmd)] in arithmetic, so only digits and our own link pass.
+case "$interval" in '' | *[!0-9]* | 0*) interval=3 ;; esac
+case "$expires" in '' | *[!0-9]*) expires=600 ;; esac
+[ "$interval" -le 30 ] 2>/dev/null || interval=3
+[ "$expires" -le 900 ] 2>/dev/null || expires=900
+case "$link" in "$url/device?code="*) ;; *) link="$url/device" ;; esac
 
 echo "Approve \"$name\" in a browser signed in to cession:"
 echo "  $link"
