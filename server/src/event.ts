@@ -1,3 +1,11 @@
+/** A running Claude Code workflow: its name, current phase, and agents finished out of those started so far. */
+export interface Workflow {
+  name: string | null;
+  phase: string | null;
+  done: number;
+  started: number;
+}
+
 export interface HookEvent {
   session_id: string;
   event: string;
@@ -5,6 +13,7 @@ export interface HookEvent {
   cwd: string | null;
   branch: string | null;
   ts: number;
+  workflow: Workflow | null;
 }
 
 const MAX_FIELD = 256;
@@ -17,6 +26,17 @@ const MAX_AGE_MS = 24 * 60 * 60_000;
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : null);
 const tooLong = (v: string | null, max: number) => v !== null && v.length > max;
+const MAX_AGENTS = 100_000;
+const count = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) <= MAX_AGENTS ? (v as number) : null);
+
+// Anything malformed reads as no workflow rather than rejecting the event, so status still updates.
+function parseWorkflow(v: unknown): Workflow | null {
+  if (typeof v !== "object" || v === null) return null;
+  const w = v as Record<string, unknown>;
+  const name = str(w.name), phase = str(w.phase), done = count(w.done), started = count(w.started);
+  if (done === null || started === null || done > started || tooLong(name, MAX_FIELD) || tooLong(phase, MAX_FIELD)) return null;
+  return { name, phase, done, started };
+}
 
 export function parseEvent(body: unknown, now = Date.now()): HookEvent | null {
   if (typeof body !== "object" || body === null) return null;
@@ -28,6 +48,7 @@ export function parseEvent(body: unknown, now = Date.now()): HookEvent | null {
     cwd: str(b.cwd),
     branch: str(b.branch),
     ts: typeof b.ts === "number" && Number.isFinite(b.ts) ? b.ts : now,
+    workflow: parseWorkflow(b.workflow),
   };
   if (!e.session_id || !e.event) return null;
   if ([e.session_id, e.event, e.machine, e.branch].some((v) => tooLong(v, MAX_FIELD)) || tooLong(e.cwd, MAX_CWD)) return null;

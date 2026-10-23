@@ -17,7 +17,7 @@ const cost = (id: string, value: number, temporality = 2) => ({
 // which parseEvent (tested in events.test.ts) would otherwise reject.
 const ev = (session_id: string, event: string, ts: number, extra: Partial<{ machine: string; cwd: string; branch: string }> = {}) =>
   runInDurableObject(hub(), (inst: Hub) =>
-    inst.applyEvent({ session_id, event, ts, machine: extra.machine ?? null, cwd: extra.cwd ?? null, branch: extra.branch ?? null }));
+    inst.applyEvent({ session_id, event, ts, machine: extra.machine ?? null, cwd: extra.cwd ?? null, branch: extra.branch ?? null, workflow: null }));
 
 describe("stale sweep", () => {
   it("marks sessions silent for 30+ minutes stale, keeps fresh ones, and revives on a new event", async () => {

@@ -110,6 +110,23 @@ describe("POST /events", () => {
     expect(await liveSession(id)).toMatchObject({ status: "working", machine: "mini", project: "api" });
   });
 
+  it("stores workflow progress, clears it when absent, and drops a malformed one", async () => {
+    const id = uid();
+    const t = Date.now() - 60_000;
+    const workflow = { name: "review", phase: "Verify", done: 3, started: 5 };
+    await ev(id, "PostToolUse", t, { workflow });
+    expect((await liveSession(id))?.workflow).toEqual(workflow);
+    // An older event arriving late doesn't roll progress back.
+    await ev(id, "PostToolUse", t - 1, { workflow: { ...workflow, done: 1 } });
+    expect((await liveSession(id))?.workflow).toEqual(workflow);
+    await ev(id, "PostToolUse", t + 1);
+    expect((await liveSession(id))?.workflow).toBeNull();
+    for (const bad of [{ done: 6, started: 5 }, { done: -1, started: 5 }, { done: 1.5, started: 5 }, { name: "n".repeat(257), done: 0, started: 0 }]) {
+      expect((await ev(id, "PostToolUse", t + 2, { workflow: bad })).status).toBe(204);
+      expect((await liveSession(id))?.workflow).toBeNull();
+    }
+  });
+
   it("a null branch keeps the known branch; a new branch replaces it", async () => {
     const id = uid();
     const t = Date.now();

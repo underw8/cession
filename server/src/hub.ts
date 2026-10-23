@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import * as authstore from "./authstore";
 import { digest, type Attempt, type ChallengePurpose, type DeviceKind, type DeviceRequest, type Devices, type FailureKey, type PasskeyRow, type Session, type SessionKind } from "./authstore";
-import type { HookEvent } from "./event";
+import type { HookEvent, Workflow } from "./event";
 import { MAX_USAGE, USAGE_COLUMNS, type UsageColumn, type UsageUpdate } from "./otlp";
 
 export type Status = "working" | "needs_you" | "idle" | "stale" | "ended";
@@ -32,7 +32,11 @@ export type SessionRow = {
   last_seen: number;
   last_event: number;
   ended_at: number | null;
+  workflow: Workflow | null;
 } & Record<UsageColumn, number>;
+
+/** As stored: workflow is JSON text. */
+export type StoredSessionRow = Omit<SessionRow, "workflow"> & { workflow: string | null };
 
 export interface Snapshot {
   sessions: SessionRow[];
@@ -63,7 +67,8 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS sessions (
   tokens_in          INTEGER NOT NULL DEFAULT 0,
   tokens_out         INTEGER NOT NULL DEFAULT 0,
   tokens_cache_read  INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_write INTEGER NOT NULL DEFAULT 0
+  tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+  workflow           TEXT
 )`;
 
 // Usage accrued per UTC day, so history counts spend on the day it happened, not the day a session started.
@@ -90,8 +95,8 @@ const BACKFILL_USAGE = `INSERT INTO usage_daily
 // Hooks post in the background, so events can arrive out of order:
 // only an event at least as new as last_event may change status/ended_at.
 const UPSERT_EVENT = `
-INSERT INTO sessions (id, machine, project, cwd, branch, status, started_at, last_seen, last_event, ended_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sessions (id, machine, project, cwd, branch, status, started_at, last_seen, last_event, ended_at, workflow)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   machine    = COALESCE(excluded.machine, sessions.machine),
   project    = COALESCE(excluded.project, sessions.project),
@@ -100,6 +105,7 @@ ON CONFLICT(id) DO UPDATE SET
   started_at = MIN(COALESCE(sessions.started_at, excluded.started_at), excluded.started_at),
   status     = CASE WHEN excluded.last_event >= sessions.last_event THEN excluded.status   ELSE sessions.status   END,
   ended_at   = CASE WHEN excluded.last_event >= sessions.last_event THEN excluded.ended_at ELSE sessions.ended_at END,
+  workflow   = CASE WHEN excluded.last_event >= sessions.last_event THEN excluded.workflow ELSE sessions.workflow END,
   last_event = MAX(sessions.last_event, excluded.last_event),
   last_seen  = MAX(sessions.last_seen, excluded.last_seen)`;
 
@@ -115,6 +121,11 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec(SCHEMA);
     this.sql.exec(authstore.AUTH_SCHEMA);
     this.sql.exec(BATCH_SCHEMA);
+    try {
+      this.sql.exec(`ALTER TABLE sessions ADD COLUMN workflow TEXT`);
+    } catch {
+      // Column already exists.
+    }
     authstore.migrateAuth(this.sql);
     // One transaction, so the table never exists without its backfill.
     if (!this.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = 'usage_daily'`).toArray().length) {
@@ -236,7 +247,8 @@ export class Hub extends DurableObject<Env> {
     const project = e.cwd?.split("/").findLast(Boolean) ?? null;
     const endedAt = status === "ended" ? e.ts : null;
     // last_seen is arrival time, since the stale sweep compares it with the server clock.
-    this.sql.exec(UPSERT_EVENT, e.session_id, e.machine, project, e.cwd, e.branch, status, e.ts, Date.now(), e.ts, endedAt);
+    this.sql.exec(UPSERT_EVENT, e.session_id, e.machine, project, e.cwd, e.branch, status, e.ts, Date.now(), e.ts, endedAt,
+      e.workflow && JSON.stringify(e.workflow));
     this.broadcast();
     if (status !== "ended") await this.ensureAlarm();
   }
@@ -277,8 +289,9 @@ export class Hub extends DurableObject<Env> {
 
   snapshot(): Snapshot {
     const sessions = this.sql
-      .exec<SessionRow>(`SELECT * FROM sessions WHERE status IN ${LIVE_SQL}`)
-      .toArray();
+      .exec<StoredSessionRow>(`SELECT * FROM sessions WHERE status IN ${LIVE_SQL}`)
+      .toArray()
+      .map((r) => ({ ...r, workflow: r.workflow ? (JSON.parse(r.workflow) as Workflow) : null }));
     return { sessions };
   }
 

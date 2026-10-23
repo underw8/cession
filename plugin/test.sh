@@ -36,6 +36,21 @@ hook Stop;              expect idle
 [ "$(field project)" = plugin ] && echo "ok: project" || { echo "FAIL: project"; exit 1; }
 [ "$(field branch)" = "$(git -C "$here" branch --show-current)" ] && echo "ok: branch" || { echo "FAIL: branch"; exit 1; }
 
+# Workflow progress comes from the run journal beside the transcript; a finished run's result file clears it.
+tdir=$(mktemp -d); run=wf_test-1; wdir="$tdir/s/subagents/workflows/$run"
+mkdir -p "$wdir" "$tdir/s/workflows/scripts"; : > "$tdir/s/workflows/scripts/demo-$run.js"
+printf '%s\n' '{"type":"launched"}' '{"type":"started","agentId":"a1","phase":"Scan"}' '{"type":"result","agentId":"a1","result":{}}' \
+  '{"type":"started","agentId":"a2","phase":"Verify"}' > "$wdir/journal.jsonl"
+wf_hook() { printf '{"session_id":"%s","hook_event_name":"PostToolUse","cwd":"%s","transcript_path":"%s"}' "$sid" "$here" "$1" | "$here/hooks/report.sh"; }
+wf_hook "$wdir/agent-a2.jsonl"
+want='{"name":"demo","phase":"Verify","done":1,"started":2}'
+i=0; until [ "$(field 'workflow | tojson')" = "$want" ]; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: workflow '$(field 'workflow | tojson')'"; exit 1; }; sleep 0.1; done
+echo "ok: workflow progress"
+: > "$tdir/s/workflows/$run.json"; wf_hook "$tdir/s.jsonl"
+i=0; until [ "$(field 'workflow | tojson')" = null ]; do i=$((i + 1)); [ "$i" -lt 30 ] || { echo "FAIL: finished workflow still shown"; exit 1; }; sleep 0.1; done
+rm -rf "$tdir"
+echo "ok: finished workflow cleared"
+
 hook SessionEnd;        expect ""
 
 # Token file fallback, for hosts whose Claude Code never reads the shell profile.
