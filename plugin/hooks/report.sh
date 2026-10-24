@@ -35,7 +35,7 @@ command -v jq >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || exit 0
 # tool input are dropped here. transcript_path is used locally, then removed before sending.
 # ts is taken now, before backgrounding, so it orders events as they happened.
 body=$(jq -c --arg machine "${CESSION_MACHINE:-$(hostname -s)}" \
-  '{session_id, event: .hook_event_name, cwd, machine: $machine, branch: null, ts: (now * 1000 | floor), workflow: null, transcript_path}' 2>/dev/null) || exit 0
+  '{session_id, event: .hook_event_name, cwd, machine: $machine, branch: null, ts: (now * 1000 | floor), transcript_path}' 2>/dev/null) || exit 0
 
 # git can hang on a network or FUSE cwd, so it runs in the background with curl.
 (
@@ -53,12 +53,12 @@ body=$(jq -c --arg machine "${CESSION_MACHINE:-$(hostname -s)}" \
   run=$(basename "$(dirname "$journal")")
   if [ -n "$dir" ] && [ -n "$journal" ] && [ ! -e "$dir/workflows/$run.json" ]; then
     script=$(ls "$dir"/workflows/scripts/*-"$run".js 2>/dev/null | head -n 1)
-    name=$(basename "$script" "-$run.js")
-    started=$(grep -c '^{"type":"started"' "$journal")
-    finished=$(( $(grep -c '"agentId"' "$journal") - started ))
-    phase=$(grep '^{"type":"started"' "$journal" | tail -n 1 | jq -r '.phase // empty')
-    body=$(printf '%s' "$body" | jq -c --arg name "$name" --arg phase "$phase" --argjson done "$finished" --argjson started "$started" \
-      '.workflow = {name: (if $name == "" then null else $name end), phase: (if $phase == "" then null else $phase end), $done, $started}')
+    # Any agent line that isn't "started" ends that agent; a resumed run's cached results have no "started".
+    # A line still being written fails to parse, so that event just goes without progress.
+    wf=$(jq -cs --arg name "$(basename "$script" "-$run.js")" '[.[] | select(.agentId)] as $a
+      | ($a | map(select(.type == "started"))) as $s | ($a | length - ($s | length)) as $done
+      | {name: $name, phase: ($s | last | .phase), $done, started: ([$s | length, $done] | max)}' "$journal" 2>/dev/null) &&
+      body=$(printf '%s' "$body" | jq -c --argjson wf "$wf" '.workflow = $wf')
   fi
   body=$(printf '%s' "$body" | jq -c 'del(.transcript_path)')
   printf 'header = "Authorization: Bearer %s"\n' "$token" |

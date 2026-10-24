@@ -4,8 +4,9 @@
 // repainted onto the existing widget.png, so its position below must match that image.
 import { chromium } from "playwright";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("../../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const IMAGES = `${ROOT}docs/images`;
 const html = fs.readFileSync(`${ROOT}server/public/index.html`, "utf8");
 const NOW = Date.parse("2026-10-18T10:30:00Z");
