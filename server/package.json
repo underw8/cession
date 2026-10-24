@@ -9,7 +9,8 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "types": "wrangler types",
-    "typecheck": "wrangler types >/dev/null && tsc --noEmit && tsc --noEmit -p test"
+    "typecheck": "wrangler types >/dev/null && tsc --noEmit && tsc --noEmit -p test",
+    "images": "playwright install chromium && node scripts/readme-images.mjs"
   },
   "cloudflare": {
     "bindings": {
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.2",
     "@vitest/coverage-istanbul": "5.0.4",
+    "playwright": "^1.64.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4",
     "wrangler": "^4.151.0"

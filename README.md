@@ -3,10 +3,10 @@
 See every Claude Code session on all your machines in one place. For each session it shows the machine, project and branch, whether it's working, waiting on you or idle, and what it costs. It also keeps daily and per-project cost history.
 
 <p align="center">
-  <img src="docs/images/dashboard.png" width="440" alt="The cession dashboard as a macOS window: one session waiting for you, three working and one idle, each with its machine, branch, run time and cost; today's cost against a 7-day bar chart; and the daily history table.">
+  <img src="docs/images/dashboard.png" width="440" alt="The cession dashboard as a macOS window: one session waiting for you, three working and one idle, each with its machine, branch, run time and cost, one with a progress ring for a running workflow; today's cost against a 7-day bar chart; and the daily history table.">
 </p>
 <p align="center">
-  <img src="docs/images/widget.png" alt="The cession widget in bar mode floating over the desktop, VS Code and Slack: one line per session with how long it has run, waited or sat idle, and today's total cost, tinted amber while a session waits for you.">
+  <img src="docs/images/widget.png" alt="The cession widget in bar mode floating over the desktop, VS Code and Slack: one line per session with how long it has run, waited or sat idle (with a progress ring while a workflow runs), and today's total cost, tinted amber while a session waits for you.">
 </p>
 
 ```

@@ -48,6 +48,11 @@
   .row .cost { font-weight: 600; }
   .row .when { font-size: 11px; color: var(--ink-3); }
   .row .meta, #more { display: none; }
+  .row .sub:has(.wf) { display: flex; align-items: center; gap: 5px; }
+  .row .wf { flex: none; width: 11px; height: 11px; border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--line) 0);
+    mask: radial-gradient(circle, transparent 2.5px, #000 3px); }
+  /* Bar mode hides .sub, so a second ring shows the same progress in the pill. */
+  .row > div > .wf { display: none; }
   .row.needs_you .when { color: var(--warn-ink); font-weight: 600; }
   .empty { color: var(--ink-3); padding: 18px 14px; margin: 0; }
   .foot { border-top: 1px solid var(--line); padding: 10px 14px 12px; display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: end; }
@@ -91,6 +96,7 @@
     #live .row > div:not(.right) { display: flex; align-items: baseline; gap: 7px; }
     #live .row svg.icon { width: 10px; height: 10px; }
     #live .row.idle .title { color: var(--ink-3); font-weight: 500; }
+    #live .row > div > .wf { display: block; align-self: center; }
     .row .meta { display: inline; color: var(--ink-3); font-variant-numeric: tabular-nums; }
     .row.needs_you .meta { color: var(--warn-ink); }
     #more { display: block; flex: none; color: var(--ink-3); font-weight: 600; }
@@ -99,7 +105,7 @@
     html.cession-hover .foot { opacity: 0; }
     .today { display: flex; align-items: baseline; gap: 5px; }
     .today .value { font-size: 13px; }
-    .head, .row .title span, .row .sub, .row .right, #live .empty, #live h2, .delta, svg.spark, details { display: none; }
+    .head, .row .title span, .row .sub, .row .sub:has(.wf), .row .right, #live .empty, #live h2, .delta, svg.spark, details { display: none; }
   }
   .tip { position: fixed; pointer-events: none; opacity: 0; background: #0b0b0b; color: #fff; border-radius: 6px; padding: 5px 8px; font-size: 11px; transition: opacity .1s; }
 </style>
@@ -176,10 +182,20 @@ function rowHtml(r, s) {
         ${ICON[s]}
         <div><div class="title">${esc(r.project ?? "—")}${branch}</div>
           <div class="sub">${esc(r.machine ?? "unknown machine")}${up}</div>
+          ${workflowHtml(r.workflow)}
           <span class="meta">${barMeta(r)}</span></div>
         <div class="right"><div class="cost">${usd(r.cost_usd)}</div>
           <div class="when">${when}</div></div>
       </div>`;
+}
+
+// Agents are spawned as a run goes, so the bar is finished out of started so far, not of the whole run.
+function workflowHtml(w) {
+  if (!w) return "";
+  const label = [w.name ?? "workflow", w.phase, `${w.done}/${w.started} agents`].filter(Boolean).join(" · ");
+  const pct = w.started ? Math.round((w.done / w.started) * 100) : 0;
+  const ring = `<span class="wf" role="progressbar" aria-label="${esc(label)}" aria-valuenow="${pct}" title="${esc(label)}" style="--p:${pct}"></span>`;
+  return `<div class="sub">${ring}${esc(label)}</div>${ring.replace('role="progressbar"', 'aria-hidden="true"')}`;
 }
 
 // Bar mode's one-line summary per row: how long it has waited, run so far, or sat idle. Cost stays

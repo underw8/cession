@@ -31,10 +31,11 @@ case "$CESSION_URL" in
 esac
 command -v jq >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || exit 0
 
-# Only these fields leave the machine; prompt text and tool input are dropped here.
+# Only these fields leave the machine (plus workflow name, phase and agent counts); prompt text and
+# tool input are dropped here. transcript_path is used locally, then removed before sending.
 # ts is taken now, before backgrounding, so it orders events as they happened.
 body=$(jq -c --arg machine "${CESSION_MACHINE:-$(hostname -s)}" \
-  '{session_id, event: .hook_event_name, cwd, machine: $machine, branch: null, ts: (now * 1000 | floor)}' 2>/dev/null) || exit 0
+  '{session_id, event: .hook_event_name, cwd, machine: $machine, branch: null, ts: (now * 1000 | floor), transcript_path}' 2>/dev/null) || exit 0
 
 # git can hang on a network or FUSE cwd, so it runs in the background with curl.
 (
@@ -43,6 +44,23 @@ body=$(jq -c --arg machine "${CESSION_MACHINE:-$(hostname -s)}" \
   branch=""
   [ -n "$cwd" ] && branch=$(git -C "$cwd" branch --show-current 2>/dev/null || true)
   [ -n "$branch" ] && body=$(printf '%s' "$body" | jq -c --arg branch "$branch" '.branch = $branch')
+  # A workflow run journals agents under <session>/subagents/workflows/<run>/ and writes
+  # <session>/workflows/<run>.json once it finishes. Subagent hooks may pass their own transcript path.
+  # ponytail: a run killed before writing its result keeps showing until the next run or session end.
+  dir=$(printf '%s' "$body" | jq -r '.transcript_path // empty')
+  dir=${dir%%/subagents/*}; dir=${dir%.jsonl}
+  journal=$(ls -t "$dir"/subagents/workflows/*/journal.jsonl 2>/dev/null | head -n 1)
+  run=$(basename "$(dirname "$journal")")
+  if [ -n "$dir" ] && [ -n "$journal" ] && [ ! -e "$dir/workflows/$run.json" ]; then
+    script=$(ls "$dir"/workflows/scripts/*-"$run".js 2>/dev/null | head -n 1)
+    # Any agent line that isn't "started" ends that agent; a resumed run's cached results have no "started".
+    # A line still being written fails to parse, so that event just goes without progress.
+    wf=$(jq -cs --arg name "$(basename "$script" "-$run.js")" '[.[] | select(.agentId)] as $a
+      | ($a | map(select(.type == "started"))) as $s | ($a | length - ($s | length)) as $done
+      | {name: $name, phase: ($s | last | .phase), $done, started: ([$s | length, $done] | max)}' "$journal" 2>/dev/null) &&
+      body=$(printf '%s' "$body" | jq -c --argjson wf "$wf" '.workflow = $wf')
+  fi
+  body=$(printf '%s' "$body" | jq -c 'del(.transcript_path)')
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
     curl -s -o /dev/null --max-time 2 -K - -X POST "${CESSION_URL%/}/events" \
       -H "Content-Type: application/json" -d "$body"

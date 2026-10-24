@@ -4,7 +4,7 @@ import { env, exports } from "cloudflare:workers";
 import { expect } from "vitest";
 import worker from "../src/index";
 import type { SessionKind } from "../src/authstore";
-import type { SessionRow, Snapshot } from "../src/hub";
+import type { SessionRow, Snapshot, StoredSessionRow } from "../src/hub";
 import { SoftAuthenticator } from "./authenticator";
 
 export const BASE = "http://localhost";
@@ -41,7 +41,7 @@ export const sql = <T extends Record<string, SqlStorageValue>>(query: string, ..
   runInDurableObject(hub(), (_i, state) => state.storage.sql.exec<T>(query, ...args).toArray());
 
 /** Reads a row directly, including final (stale/ended) sessions the API hides. */
-export const row = async (id: string) => (await sql<SessionRow>("SELECT * FROM sessions WHERE id = ?", id))[0];
+export const row = async (id: string) => (await sql<StoredSessionRow>("SELECT * FROM sessions WHERE id = ?", id))[0];
 
 export async function liveSession(id: string): Promise<SessionRow | undefined> {
   const snap = await (await get("/api/sessions")).json<Snapshot>();

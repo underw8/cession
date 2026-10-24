@@ -1,4 +1,4 @@
-.PHONY: help install test dev deploy plugin-test widget widget-stop icons
+.PHONY: help install test dev deploy plugin-test widget widget-stop icons images
 
 WIDGET_BIN := widget/target/debug/cession-widget
 
@@ -17,6 +17,9 @@ dev: ## Run the Worker locally on :8787
 
 deploy: test ## Test, then deploy the Worker
 	cd server && npm run deploy
+
+images: ## Re-render the README screenshots in docs/images
+	cd server && npm run images
 
 plugin-test: ## End-to-end hook test; needs `make dev` running
 	sh plugin/test.sh
