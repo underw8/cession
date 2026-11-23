@@ -121,6 +121,10 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec(SCHEMA);
     this.sql.exec(authstore.AUTH_SCHEMA);
     this.sql.exec(BATCH_SCHEMA);
+    // Every broadcast, alarm and history read filters sessions; without these each one scans a year of rows.
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS sessions_status_last_seen ON sessions (status, last_seen)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS sessions_started_at ON sessions (started_at)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS otlp_batches_at ON otlp_batches (at)`);
     try {
       this.sql.exec(`ALTER TABLE sessions ADD COLUMN workflow TEXT`);
     } catch {
